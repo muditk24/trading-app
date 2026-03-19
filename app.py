@@ -4,24 +4,131 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 
-st.title("📊 AI Option Trading Assistant")
+st.set_page_config(layout="wide")
+st.title("📊 AI Option Trading Assistant (Rulebook Pro)")
 
-# ================= SINGLE STOCK =================
-stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
+# ================= SAFE FLOAT =================
+def safe(v, d=0):
+    try:
+        return float(v)
+    except:
+        return d
+
+# ================= OPTION LOGIC =================
+def option_trade(price, signal):
+    strike = round(price / 50) * 50
+
+    if signal == "CALL":
+        return f"{strike} CE", price, round(price*1.02,2), round(price*0.99,2)
+
+    if signal == "PUT":
+        return f"{strike} PE", price, round(price*0.98,2), round(price*1.01,2)
+
+    return None
+
+# ================= CORE RULE ENGINE =================
+def analyze(data):
+    try:
+        data = data.copy()
+        data.dropna(inplace=True)
+
+        if len(data) < 50:
+            return None
+
+        close = data['Close']
+
+        # Indicators
+        data['ema9'] = ta.trend.EMAIndicator(close, 9).ema_indicator()
+        data['ema21'] = ta.trend.EMAIndicator(close, 21).ema_indicator()
+        data['rsi'] = ta.momentum.RSIIndicator(close).rsi()
+
+        data['vwap'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close'])/3).cumsum() / data['Volume'].cumsum()
+
+        latest = data.iloc[-1]
+        prev = data.iloc[-2]
+
+        price = safe(latest['Close'])
+        ema9 = safe(latest['ema9'])
+        ema21 = safe(latest['ema21'])
+        rsi = safe(latest['rsi'],50)
+        vwap = safe(latest['vwap'])
+
+        volume = safe(latest['Volume'])
+        avg_vol = safe(data['Volume'].mean())
+
+        score = 0
+        checks = []
+
+        # ===== CHECKS =====
+
+        # 1 EMA crossover
+        if ema9 > ema21:
+            score += 1
+            checks.append("EMA Bullish")
+        else:
+            score -= 1
+
+        # 2 candle close
+        if price > prev['Close']:
+            score += 1
+            checks.append("Candle Up")
+        else:
+            score -= 1
+
+        # 3 RSI range
+        if 45 <= rsi <= 65:
+            score += 1
+            checks.append("RSI Good")
+
+        # 4 RSI filter
+        if rsi < 70:
+            score += 1
+        else:
+            score -= 1
+
+        # 5 VWAP
+        if price > vwap:
+            score += 1
+            checks.append("Above VWAP")
+        else:
+            score -= 1
+
+        # 6 Volume
+        if volume > avg_vol:
+            score += 1
+            checks.append("Volume High")
+
+        # 7 Breakout
+        if price > prev['High']:
+            score += 2
+            checks.append("Breakout Up")
+        elif price < prev['Low']:
+            score -= 2
+
+        # ===== SIGNAL =====
+        if score >= 5:
+            signal = "CALL"
+        elif score <= -5:
+            signal = "PUT"
+        else:
+            signal = "NO TRADE"
+
+        return signal, score, price, rsi, checks
+
+    except:
+        return None
+
+# ================= UI =================
+stock = st.text_input("Enter Stock", "RELIANCE.NS")
 
 if stock:
-    try:
-        data = yf.download(stock, period="3mo", interval="1d")
+    data = yf.download(stock, period="3mo", interval="1d")
 
-        if not data.empty:
-            data.dropna(inplace=True)
+    if not data.empty:
+        result = analyze(data)
 
-            close_series = data['Close'].squeeze()
-
-            # RSI
-            data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
-
-            latest = data.iloc[-1]
+        if result:
+            signal, score, price, rsi, checks = result
 
             # Chart
             fig = go.Figure(data=[go.Candlestick(
@@ -31,117 +138,69 @@ if stock:
                 low=data['Low'],
                 close=data['Close']
             )])
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, use_container_width=True)
 
-            # SAFE VALUES
-            price = float(latest['Close'])
+            st.subheader("📊 Summary")
+            st.write(f"Price: {price}")
+            st.write(f"RSI: {rsi}")
+            st.write(f"Score: {score}")
+            st.write(f"Signal: {signal}")
 
-            # RSI safe
-            try:
-                rsi = float(latest['rsi'])
-            except:
-                rsi = 50
+            st.subheader("🧠 Checks Passed")
+            for c in checks:
+                st.write(f"✔️ {c}")
 
-            st.write(f"Price: {round(price,2)}")
-            st.write(f"RSI: {round(rsi,2)}")
+            trade = option_trade(price, signal)
 
-            # Signal
-            if rsi < 40:
-                st.success("✅ CALL (Buy Zone)")
-            elif rsi > 60:
-                st.error("❌ PUT (Sell Zone)")
-            else:
-                st.warning("⚠️ Sideways")
+            if trade:
+                option, entry, target, sl = trade
 
-        else:
-            st.error("Stock data not found")
+                st.subheader("📊 Trade Setup")
+                st.write(f"Option: {option}")
+                st.write(f"Entry: {entry}")
+                st.write(f"Target: {target}")
+                st.write(f"SL: {sl}")
 
-    except:
-        st.error("Error loading stock data")
-
-# ================= LIVE SCANNER =================
-
-st.header("🔥 Live Market Scanner")
+# ================= SCANNER =================
+st.header("🔥 Scanner")
 
 stocks = [
-    "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
-    "SBIN.NS","ITC.NS","LT.NS","AXISBANK.NS","KOTAKBANK.NS"
+    "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS",
+    "ICICIBANK.NS","SBIN.NS","ITC.NS","AXISBANK.NS"
 ]
 
-results = []
+rows = []
 
 for s in stocks:
-    try:
-        data = yf.download(s, period="3mo", interval="1d")
+    data = yf.download(s, period="3mo", interval="1d")
 
-        if data.empty:
-            continue
-
-        data.dropna(inplace=True)
-
-        close_series = data['Close'].squeeze()
-        data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
-
-        latest = data.iloc[-1]
-
-        try:
-            rsi = float(latest['rsi'])
-        except:
-            continue
-
-        if rsi < 45:
-            results.append({"Stock": s, "Signal": "CALL", "RSI": round(rsi,2)})
-        elif rsi > 55:
-            results.append({"Stock": s, "Signal": "PUT", "RSI": round(rsi,2)})
-
-    except:
+    if data.empty:
         continue
 
-if results:
-    df = pd.DataFrame(results)
-    st.dataframe(df.head(5))
+    result = analyze(data)
+
+    if result:
+        signal, score, price, rsi, _ = result
+
+        if signal != "NO TRADE":
+            trade = option_trade(price, signal)
+
+            if trade:
+                option, entry, target, sl = trade
+
+                rows.append({
+                    "Stock": s,
+                    "Signal": signal,
+                    "Option": option,
+                    "Entry": entry,
+                    "Target": target,
+                    "SL": sl
+                })
+
+if rows:
+    df = pd.DataFrame(rows)
+    st.dataframe(df)
 else:
-    st.write("No strong live signals")
-
-# ================= LAST DAY BEST =================
-
-st.header("🔥 Last Day Best Trades (Guaranteed)")
-
-last_day_results = []
-
-for s in stocks:
-    try:
-        data = yf.download(s, period="5d", interval="1d")
-
-        if len(data) < 2:
-            continue
-
-        data.dropna(inplace=True)
-
-        prev = data.iloc[-2]
-        curr = data.iloc[-1]
-
-        change = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
-
-        signal = "CALL" if change > 0 else "PUT"
-
-        last_day_results.append({
-            "Stock": s,
-            "Change %": round(change,2),
-            "Signal": signal
-        })
-
-    except:
-        continue
-
-if last_day_results:
-    df2 = pd.DataFrame(last_day_results)
-    df2 = df2.sort_values(by="Change %", ascending=False)
-
-    st.subheader("📈 Top Gainers (CALL)")
-    st.dataframe(df2.head(3))
-
-    st.subheader("📉 Top Losers (PUT)")
-    st.dataframe(df2.tail(3))
+    st.write("No trades found")
 
 st.write("⚠️ For learning purpose only")
