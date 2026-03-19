@@ -69,7 +69,9 @@ def analyze_sentiment(headline):
     else: return "⚪ Neutral"
 
 def get_indian_news(company_name):
-    query = urllib.parse.quote(f"{company_name} stock news india")
+    # Exact quotes aur 'share market news' lagaya gaya hai 100% accuracy ke liye
+    search_term = f'"{company_name}" share market news'
+    query = urllib.parse.quote(search_term)
     url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
     
     try:
@@ -80,7 +82,8 @@ def get_indian_news(company_name):
         root = ET.fromstring(xml_data)
         news_items = []
         
-        for item in root.findall('.//item')[:2]: 
+        # Top 3 latest exact match news
+        for item in root.findall('.//item')[:3]: 
             title = item.find('title').text
             link = item.find('link').text
             clean_title = title.rsplit(' - ', 1)[0] if ' - ' in title else title
@@ -327,7 +330,7 @@ with tab4:
             symbol = STOCK_MAP[name]
             
             try:
-                # 1. Fetching LIVE Indian News
+                # 1. Fetching LIVE Indian News via exact match
                 live_news = get_indian_news(name)
                 
                 # 2. Fetching Technical Data
@@ -377,5 +380,3 @@ with tab4:
             )
         else:
             st.info("No major news updates available at this moment.")
-
-        
