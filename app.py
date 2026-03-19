@@ -1,5 +1,3 @@
-Fixed Option Trading Assistant (Streamlit)
-
 import streamlit as st import yfinance as yf import pandas as pd import ta import plotly.graph_objects as go
 
 st.title("📊 AI Option Trading Assistant")
