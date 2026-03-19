@@ -5,7 +5,7 @@ import ta
 import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("📊 AI Option Trading Assistant (Pro UI)")
+st.title("📊 AI Option Trading Assistant (Fixed Version)")
 
 # ================= SAFE =================
 def safe(v, d=0):
@@ -29,11 +29,10 @@ def option_trade(price, signal):
 # ================= ANALYSIS =================
 def analyze(data):
     try:
-        data = data.copy()
-        data.dropna(inplace=True)
+        data = data.copy().dropna()
 
-        if len(data) < 50:
-            return None
+        if len(data) < 30:
+            return "NO DATA", 0, 0, 0, []
 
         close = data['Close']
 
@@ -42,8 +41,6 @@ def analyze(data):
         data['ema21'] = ta.trend.EMAIndicator(close, 21).ema_indicator()
         data['rsi'] = ta.momentum.RSIIndicator(close).rsi()
 
-        data['vwap'] = (data['Volume'] * (data['High']+data['Low']+data['Close'])/3).cumsum() / data['Volume'].cumsum()
-
         latest = data.iloc[-1]
         prev = data.iloc[-2]
 
@@ -51,79 +48,51 @@ def analyze(data):
         ema9 = safe(latest['ema9'])
         ema21 = safe(latest['ema21'])
         rsi = safe(latest['rsi'],50)
-        vwap = safe(latest['vwap'])
-
-        volume = safe(latest['Volume'])
-        avg_vol = safe(data['Volume'].mean())
 
         score = 0
         checks = []
 
-        # RULES
+        # SIMPLE RULES (loosened)
         if ema9 > ema21:
             score += 1
             checks.append("EMA Bullish")
-        else:
-            score -= 1
 
         if price > prev['Close']:
             score += 1
-            checks.append("Candle Up")
-        else:
-            score -= 1
+            checks.append("Price Up")
 
-        if 45 <= rsi <= 65:
+        if rsi < 60:
             score += 1
-            checks.append("RSI Good")
+            checks.append("RSI Safe")
 
-        if rsi < 70:
+        if rsi > 40:
             score += 1
-        else:
-            score -= 1
+            checks.append("Momentum OK")
 
-        if price > vwap:
-            score += 1
-            checks.append("Above VWAP")
-        else:
-            score -= 1
-
-        if volume > avg_vol:
-            score += 1
-            checks.append("Volume High")
-
-        if price > prev['High']:
-            score += 2
-            checks.append("Breakout Up")
-        elif price < prev['Low']:
-            score -= 2
-
-        # FINAL SIGNAL
-        if score >= 5:
-            signal = "🔥 STRONG CALL"
-        elif score >= 3:
+        # SIGNAL (loose threshold)
+        if score >= 3:
             signal = "CALL"
-        elif score <= -5:
-            signal = "🔥 STRONG PUT"
-        elif score <= -3:
+        elif score <= 1:
             signal = "PUT"
         else:
-            signal = "NO TRADE"
+            signal = "SIDEWAYS"
 
         return signal, score, price, rsi, checks
 
     except:
-        return None
+        return "ERROR", 0, 0, 0, []
 
 # ================= UI =================
-stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
+stock = st.text_input("Enter Stock", "RELIANCE.NS")
 
 if stock:
-    data = yf.download(stock, period="3mo", interval="1d")
+    try:
+        data = yf.download(stock, period="1mo", interval="1d")
 
-    if not data.empty:
-        result = analyze(data)
-
-        if result:
+        if data.empty:
+            st.error("❌ Data not coming (check stock name)")
+        else:
+            result = analyze(data)
             signal, score, price, rsi, checks = result
 
             # Chart
@@ -136,83 +105,60 @@ if stock:
             )])
             st.plotly_chart(fig, use_container_width=True)
 
-            # CONFIDENCE
-            confidence = min(90, max(50, abs(score)*10))
+            st.markdown("## 🚀 TRADE OUTPUT")
 
-            if score >= 5:
-                risk = "LOW"
-            elif abs(score) >= 3:
-                risk = "MEDIUM"
-            else:
-                risk = "HIGH"
+            st.write(f"Signal: {signal}")
+            st.write(f"Score: {score}")
+            st.write(f"Price: {price}")
+            st.write(f"RSI: {rsi}")
 
-            st.markdown("## 🚀 TRADE DECISION")
-            st.write(f"### {signal}")
-            st.write(f"📈 Confidence: {confidence}%")
-            st.write(f"💰 Price: {price}")
-
-            if signal != "NO TRADE":
-                trade = option_trade(price, signal)
-
-                if trade:
-                    option, entry, target, sl = trade
-
-                    st.markdown("### 🎯 Trade Setup")
-                    st.write(f"Option: {option}")
-                    st.write(f"Entry: {entry}")
-                    st.write(f"Target: {target}")
-                    st.write(f"Stop Loss: {sl}")
-
-            st.markdown("### 🧠 Why this trade?")
-            for c in checks:
-                st.write(f"✔️ {c}")
-
-            st.write(f"⚠️ Risk Level: {risk}")
-
-# ================= SCANNER =================
-st.header("🔥 Smart Scanner")
-
-stocks = [
-    "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS",
-    "ICICIBANK.NS","SBIN.NS","ITC.NS","AXISBANK.NS"
-]
-
-rows = []
-
-for s in stocks:
-    data = yf.download(s, period="3mo", interval="1d")
-
-    if data.empty:
-        continue
-
-    result = analyze(data)
-
-    if result:
-        signal, score, price, rsi, _ = result
-
-        if signal != "NO TRADE":
-            confidence = min(90, max(50, abs(score)*10))
-
+            # OPTION
             trade = option_trade(price, signal)
 
             if trade:
                 option, entry, target, sl = trade
+                st.markdown("### 🎯 Trade Setup")
+                st.write(f"Option: {option}")
+                st.write(f"Entry: {entry}")
+                st.write(f"Target: {target}")
+                st.write(f"SL: {sl}")
 
-                rows.append({
-                    "Stock": s,
-                    "Signal": signal,
-                    "Confidence": confidence,
-                    "Option": option,
-                    "Entry": entry,
-                    "Target": target,
-                    "SL": sl
-                })
+            st.markdown("### 🧠 Checks")
+            for c in checks:
+                st.write(f"✔️ {c}")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+# ================= SCANNER =================
+st.header("🔥 Scanner")
+
+stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","SBIN.NS"]
+
+rows = []
+
+for s in stocks:
+    try:
+        data = yf.download(s, period="1mo", interval="1d")
+
+        if data.empty:
+            continue
+
+        signal, score, price, rsi, _ = analyze(data)
+
+        rows.append({
+            "Stock": s,
+            "Signal": signal,
+            "Price": price
+        })
+
+    except:
+        continue
 
 if rows:
     df = pd.DataFrame(rows)
-    df = df.sort_values(by="Confidence", ascending=False)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df)
 else:
-    st.write("No trades found")
+    st.write("No data")
 
 st.write("⚠️ For learning purpose only")
