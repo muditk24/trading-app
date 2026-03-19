@@ -1,3 +1,4 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -18,14 +19,15 @@ def safe_float(val, default=0):
 # ================= CUSTOM INDICATORS =================
 def calculate_vwap(df):
     """Calculates Intraday VWAP"""
-    # Create a copy to avoid SettingWithCopyWarning
     df = df.copy()
-    # Ensure timezone-aware datetime index is converted properly to extract date
     df['Date'] = pd.to_datetime(df.index).date
     df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['VP'] = df['Typical_Price'] * df['Volume']
     
-    # Calculate cumulative values per day
+    # If volume is 0 (like in Indices on Yahoo Finance), return Typical Price to avoid DivisionByZero
+    if df['Volume'].sum() == 0:
+        return df['Typical_Price']
+        
+    df['VP'] = df['Typical_Price'] * df['Volume']
     df['Cum_Vol'] = df.groupby('Date')['Volume'].cumsum()
     df['Cum_VP'] = df.groupby('Date')['VP'].cumsum()
     df['VWAP'] = df['Cum_VP'] / df['Cum_Vol']
@@ -50,17 +52,22 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.iloc[current, df.columns.get_loc('InUptrend')] = df.iloc[previous, df.columns.get_loc('InUptrend')]
             
-            # Adjust bands
             if df['InUptrend'].iloc[current] and df['Lowerband'].iloc[current] < df['Lowerband'].iloc[previous]:
                 df.iloc[current, df.columns.get_loc('Lowerband')] = df['Lowerband'].iloc[previous]
             if not df['InUptrend'].iloc[current] and df['Upperband'].iloc[current] > df['Upperband'].iloc[previous]:
                 df.iloc[current, df.columns.get_loc('Upperband')] = df['Upperband'].iloc[previous]
                 
-    return df['InUptrend'] # True = Green (Bullish), False = Red (Bearish)
+    return df['InUptrend'] 
 
 # ================= OPTION LOGIC =================
-def option_trade(price, signal):
-    strike = round(price / 50) * 50
+def option_trade(symbol, price, signal):
+    # Adjust strike difference based on Index or Stock
+    if "^NSEBANK" in symbol: step = 100
+    elif "^NSEI" in symbol: step = 50
+    else: step = 20 # Standard approx for stocks
+
+    strike = round(price / step) * step
+    
     if "CALL" in signal:
         return f"{strike} CE", price, round(price*1.05, 2), round(price*0.95, 2)
     elif "PUT" in signal:
@@ -68,13 +75,12 @@ def option_trade(price, signal):
     return None
 
 # ================= ANALYSIS (BASED ON RULEBOOK) =================
-def analyze_stock(data):
+def analyze_stock(data, is_index=False):
     try:
         data = data.copy()
         data.dropna(inplace=True)
         if len(data) < 30: return None
 
-        # Add indicators
         close = data['Close']
         data['EMA9'] = ta.trend.EMAIndicator(close, window=9).ema_indicator()
         data['EMA21'] = ta.trend.EMAIndicator(close, window=21).ema_indicator()
@@ -91,8 +97,6 @@ def analyze_stock(data):
         
         ema9 = safe_float(latest['EMA9'])
         ema21 = safe_float(latest['EMA21'])
-        prev_ema9 = safe_float(prev['EMA9'])
-        prev_ema21 = safe_float(prev['EMA21'])
         
         rsi = safe_float(latest['RSI'])
         vwap = safe_float(latest['VWAP'])
@@ -101,93 +105,91 @@ def analyze_stock(data):
         volume = safe_float(latest['Volume'])
         avg_vol = safe_float(latest['Avg_Vol'])
 
-        # Rule Checks (Max Score = 7 for technical setup)
+        # Auto-detect index if volume is 0
+        if volume == 0 or pd.isna(volume):
+            is_index = True
+
         call_score = 0
         put_score = 0
         reasons = []
 
         # --- CALL RULES ---
-        # 1 & 2. EMA 9 crossed above 21 & Candle closed above
         if ema9 > ema21 and price > ema9 and price > open_price: 
             call_score += 2; reasons.append("EMA 9>21 & Closed Above")
-        # 3. Supertrend Green
         if supertrend_green: 
             call_score += 1; reasons.append("Supertrend is Green")
-        # 4 & 5. RSI between 45-65 & Below 70
         if 45 <= rsi <= 65: 
             call_score += 1; reasons.append(f"RSI optimal ({round(rsi,1)})")
         elif rsi < 70:
-            call_score += 0.5 # Partial point if not optimal but safe
-        # 6. Price above VWAP
-        if price > vwap: 
-            call_score += 1; reasons.append("Price > VWAP")
-        # 7. Volume above average
-        if volume > avg_vol: 
-            call_score += 1; reasons.append("Volume Spike")
+            call_score += 0.5 
+            
+        if not is_index:
+            if price > vwap: 
+                call_score += 1; reasons.append("Price > VWAP")
+            if volume > avg_vol: 
+                call_score += 1; reasons.append("Volume Spike")
 
         # --- PUT RULES ---
-        # 1 & 2. EMA 9 crossed below 21 & Candle closed below
         if ema9 < ema21 and price < ema9 and price < open_price: 
             put_score += 2; reasons.append("EMA 9<21 & Closed Below")
-        # 3. Supertrend Red
         if not supertrend_green: 
             put_score += 1; reasons.append("Supertrend is Red")
-        # 4 & 5. RSI between 35-55 & Above 30
         if 35 <= rsi <= 55: 
             put_score += 1; reasons.append(f"RSI optimal ({round(rsi,1)})")
         elif rsi > 30:
             put_score += 0.5
-        # 6. Price below VWAP
-        if price < vwap: 
-            put_score += 1; reasons.append("Price < VWAP")
-        # 7. Volume above average
-        if volume > avg_vol: 
-            put_score += 1; reasons.append("Volume Spike")
+            
+        if not is_index:
+            if price < vwap: 
+                put_score += 1; reasons.append("Price < VWAP")
+            if volume > avg_vol: 
+                put_score += 1; reasons.append("Volume Spike")
 
-        # Decide Signal
         signal = "⚪ NO TRADE"
         final_score = 0
         
-        # We need at least 5 points out of 7 for a valid trade setup
-        if call_score >= 5:
-            signal = "🟢 STRONG CALL" if call_score >= 6 else "🟢 CALL"
+        # Adjust passing score for indices since they don't have VWAP/Volume points
+        passing_score = 3.5 if is_index else 5
+        
+        if call_score >= passing_score:
+            signal = "🟢 STRONG CALL" if call_score >= (passing_score + 1) else "🟢 CALL"
             final_score = call_score
-        elif put_score >= 5:
-            signal = "🔴 STRONG PUT" if put_score >= 6 else "🔴 PUT"
+        elif put_score >= passing_score:
+            signal = "🔴 STRONG PUT" if put_score >= (passing_score + 1) else "🔴 PUT"
             final_score = put_score
         else:
-            reasons = ["Setup not matching all 7 rules"]
+            reasons = ["Setup not matching enough rules"]
 
         return signal, final_score, price, round(rsi, 2), reasons
     except Exception as e:
         return None
 
 # ================= UI LAYOUT =================
-st.sidebar.title("⚙️ Control Panel")
-user_input = st.sidebar.text_input("Search Any Stock:", "RELIANCE").upper().strip()
+st.title("📊 AI Option Trading Assistant (Pro Detailed)")
 
-if not user_input.endswith(".NS"): stock_symbol = user_input + ".NS"
-else: stock_symbol = user_input
+# Create 3 Tabs now
+tab1, tab2, tab3 = st.tabs(["📊 Single Stock Analysis", "📈 Nifty & BankNifty Setup", "🔥 Top 10 Stocks Scanner"])
 
-tab1, tab2 = st.tabs(["📊 Single Stock Analysis", "🔥 Top 5 Scanner"])
-
+# ---------- TAB 1: SINGLE STOCK ----------
 with tab1:
+    user_input = st.text_input("🔍 Search Any Stock (e.g. RELIANCE, TCS):", "RELIANCE").upper().strip()
+
+    if not user_input.endswith(".NS"): stock_symbol = user_input + ".NS"
+    else: stock_symbol = user_input
+
     st.header(f"Intraday Analysis (15m) for {stock_symbol.replace('.NS', '')}")
     
     with st.spinner('Fetching 15m intraday data...'):
-        # Fetched 5 days of 15m data for accurate VWAP and EMAs
         data = yf.Ticker(stock_symbol).history(period="5d", interval="15m")
 
     if not data.empty:
         result = analyze_stock(data)
-
         if result:
             signal, score, price, rsi, reasons = result
-
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Current Price", f"₹{price}")
             col2.metric("RSI", rsi)
-            col3.metric("Rule Score (Out of 7)", score)
+            col3.metric("Rule Score", score)
             
             if "CALL" in signal: col4.success(signal)
             elif "PUT" in signal: col4.error(signal)
@@ -208,7 +210,7 @@ with tab1:
                 for r in reasons:
                     st.write(f"✔️ {r}")
                 
-                trade = option_trade(price, signal)
+                trade = option_trade(stock_symbol, price, signal)
                 if trade and "NO TRADE" not in signal:
                     st.markdown("### 🎯 Trade Setup")
                     option, entry, target, sl = trade
@@ -218,25 +220,68 @@ with tab1:
     else:
         st.error(f"Could not fetch intraday data for {stock_symbol}.")
 
+# ---------- TAB 2: INDICES ----------
 with tab2:
-    st.header("⚡ Top 5 Trades Scanner (15m Intraday)")
-    st.write("Scanning Nifty 50 stocks based on your 9-Step Rulebook...")
+    st.header("📈 Major Indices Scanner (15m)")
+    st.write("Special rules applied for indices (VWAP & Volume rules bypassed as index has no volume data).")
 
-    nifty_50 = [
+    indices = {
+        "NIFTY 50": "^NSEI",
+        "BANK NIFTY": "^NSEBANK"
+    }
+
+    cols = st.columns(len(indices))
+    
+    for idx, (name, symbol) in enumerate(indices.items()):
+        with cols[idx]:
+            st.subheader(name)
+            data = yf.Ticker(symbol).history(period="5d", interval="15m")
+            
+            if not data.empty:
+                result = analyze_stock(data, is_index=True)
+                if result:
+                    signal, score, price, rsi, reasons = result
+                    
+                    st.metric("LTP", f"₹{price}")
+                    st.write(f"**RSI:** {rsi}")
+                    
+                    if "CALL" in signal: st.success(signal)
+                    elif "PUT" in signal: st.error(signal)
+                    else: st.warning(signal)
+                    
+                    if "NO TRADE" not in signal:
+                        trade = option_trade(symbol, price, signal)
+                        if trade:
+                            option, entry, target, sl = trade
+                            st.info(f"**Strike:** {option}")
+                            
+                    st.markdown("**Reasons:**")
+                    for r in reasons:
+                        st.caption(f"✔️ {r}")
+            else:
+                st.write("Data not available right now.")
+
+# ---------- TAB 3: TOP 10 SCANNER ----------
+with tab3:
+    st.header("⚡ Top 10 Stocks Scanner (15m Intraday)")
+    st.write("Scanning top liquid stocks for the best setups...")
+
+    nifty_list = [
         "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","SBIN","BHARTIARTL",
         "ITC","LT","BAJFINANCE","HCLTECH","ASIANPAINT","AXISBANK","MARUTI",
-        "SUNPHARMA","KOTAKBANK","TITAN","TATAMOTORS","ULTRACEMCO","NTPC"
+        "SUNPHARMA","KOTAKBANK","TITAN","TATAMOTORS","ULTRACEMCO","NTPC",
+        "M&M","WIPRO","POWERGRID","BAJAJFINSV","ADANIENT","ONGC","COALINDIA",
+        "JSWSTEEL","TATASTEEL","HINDALCO"
     ]
 
-    if st.button("Start Scan 🚀"):
+    if st.button("Start Top 10 Scan 🚀"):
         rows = []
         progress_bar = st.progress(0)
         
-        for i, s in enumerate(nifty_50):
-            progress_bar.progress((i + 1) / len(nifty_50))
+        for i, s in enumerate(nifty_list):
+            progress_bar.progress((i + 1) / len(nifty_list))
             
             symbol = f"{s}.NS"
-            # 15 min timeframe is best for this specific setup
             data = yf.Ticker(symbol).history(period="5d", interval="15m")
             
             if not data.empty:
@@ -244,7 +289,7 @@ with tab2:
                 if result:
                     signal, score, price, rsi, _ = result
                     if "NO TRADE" not in signal:
-                        trade = option_trade(price, signal)
+                        trade = option_trade(symbol, price, signal)
                         if trade:
                             option, entry, target, sl = trade
                             rows.append({
@@ -257,10 +302,8 @@ with tab2:
 
         if rows:
             df = pd.DataFrame(rows)
-            # Sort by score and take TOP 5 ONLY
-            df = df.sort_values(by="Score", ascending=False).head(5)
-            
-            # Reset index so it looks clean (1 to 5)
+            # CHANGED TO .head(10) FOR TOP 10 STOCKS
+            df = df.sort_values(by="Score", ascending=False).head(10)
             df.index = np.arange(1, len(df) + 1)
             
             st.dataframe(
@@ -268,6 +311,4 @@ with tab2:
                 use_container_width=True
             )
         else:
-            st.warning("Koi solid intraday setup nahi mila. Market range-bound ya rules fulfill nahi ho rahe.")
-
-
+            st.warning("Koi solid intraday setup nahi mila. Market range-bound hai.")
