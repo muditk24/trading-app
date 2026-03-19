@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -9,6 +8,37 @@ import numpy as np
 # UI Setup
 st.set_page_config(page_title="Pro Options Trader", layout="wide", page_icon="📈")
 
+# ================= SMART DICTIONARY (GLOBAL) =================
+# Ab yeh pure app mein kahin bhi kaam karega
+STOCK_MAP = {
+    "GODREJ PROPERTIES": "GODREJPROP",
+    "GODREJ CONSUMER": "GODREJCP",
+    "GODREJ": "GODREJCP", # Default godrej
+    "STATE BANK OF INDIA": "SBIN",
+    "SBI": "SBIN",
+    "HDFC BANK": "HDFCBANK",
+    "RELIANCE INDUSTRIES": "RELIANCE",
+    "TATA MOTORS": "TATAMOTORS",
+    "BAJAJ FINANCE": "BAJFINANCE",
+    "COAL INDIA": "COALINDIA",
+    "ONGC": "ONGC",
+    "POWER FINANCE": "PFC",
+    "PFC": "PFC",
+    "TCS": "TCS",
+    "INFY": "INFY"
+}
+
+def get_ticker_symbol(name):
+    """Company ka naam lega aur exact Yahoo Finance symbol return karega"""
+    name_upper = str(name).upper().strip()
+    # Check if name is in dictionary, else use the raw name
+    base_symbol = STOCK_MAP.get(name_upper, name_upper)
+    
+    # Agar index nahi hai aur .NS nahi laga hai, toh laga do
+    if not base_symbol.endswith(".NS") and not base_symbol.startswith("^"):
+        return f"{base_symbol}.NS"
+    return base_symbol
+
 # ================= SAFE FLOAT =================
 def safe_float(val, default=0):
     try:
@@ -18,12 +48,10 @@ def safe_float(val, default=0):
 
 # ================= CUSTOM INDICATORS =================
 def calculate_vwap(df):
-    """Calculates Intraday VWAP"""
     df = df.copy()
     df['Date'] = pd.to_datetime(df.index).date
     df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
     
-    # If volume is 0 (like in Indices on Yahoo Finance), return Typical Price to avoid DivisionByZero
     if df['Volume'].sum() == 0:
         return df['Typical_Price']
         
@@ -34,7 +62,6 @@ def calculate_vwap(df):
     return df['VWAP']
 
 def calculate_supertrend(df, period=10, multiplier=3):
-    """Calculates Supertrend (Green/Red)"""
     df = df.copy()
     hl2 = (df['High'] + df['Low']) / 2
     df['ATR'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=period).average_true_range()
@@ -61,10 +88,9 @@ def calculate_supertrend(df, period=10, multiplier=3):
 
 # ================= OPTION LOGIC =================
 def option_trade(symbol, price, signal):
-    # Adjust strike difference based on Index or Stock
     if "^NSEBANK" in symbol: step = 100
     elif "^NSEI" in symbol: step = 50
-    else: step = 20 # Standard approx for stocks
+    else: step = 20
 
     strike = round(price / step) * step
     
@@ -74,7 +100,7 @@ def option_trade(symbol, price, signal):
         return f"{strike} PE", price, round(price*0.95, 2), round(price*1.05, 2)
     return None
 
-# ================= ANALYSIS (BASED ON RULEBOOK) =================
+# ================= ANALYSIS =================
 def analyze_stock(data, is_index=False):
     try:
         data = data.copy()
@@ -94,18 +120,14 @@ def analyze_stock(data, is_index=False):
 
         price = safe_float(latest['Close'])
         open_price = safe_float(latest['Open'])
-        
         ema9 = safe_float(latest['EMA9'])
         ema21 = safe_float(latest['EMA21'])
-        
         rsi = safe_float(latest['RSI'])
         vwap = safe_float(latest['VWAP'])
         supertrend_green = latest['Supertrend_Green']
-        
         volume = safe_float(latest['Volume'])
         avg_vol = safe_float(latest['Avg_Vol'])
 
-        # Auto-detect index if volume is 0
         if volume == 0 or pd.isna(volume):
             is_index = True
 
@@ -147,8 +169,6 @@ def analyze_stock(data, is_index=False):
 
         signal = "⚪ NO TRADE"
         final_score = 0
-        
-        # Adjust passing score for indices since they don't have VWAP/Volume points
         passing_score = 3.5 if is_index else 5
         
         if call_score >= passing_score:
@@ -167,15 +187,14 @@ def analyze_stock(data, is_index=False):
 # ================= UI LAYOUT =================
 st.title("📊 AI Option Trading Assistant (Pro Detailed)")
 
-# Create 3 Tabs now
 tab1, tab2, tab3 = st.tabs(["📊 Single Stock Analysis", "📈 Nifty & BankNifty Setup", "🔥 Top 10 Stocks Scanner"])
 
 # ---------- TAB 1: SINGLE STOCK ----------
 with tab1:
-    user_input = st.text_input("🔍 Search Any Stock (e.g. RELIANCE, TCS):", "RELIANCE").upper().strip()
+    user_input = st.text_input("🔍 Search Any Stock (Name or Symbol):", "Godrej Properties")
 
-    if not user_input.endswith(".NS"): stock_symbol = user_input + ".NS"
-    else: stock_symbol = user_input
+    # Global function use kiya
+    stock_symbol = get_ticker_symbol(user_input)
 
     st.header(f"Intraday Analysis (15m) for {stock_symbol.replace('.NS', '')}")
     
@@ -218,18 +237,12 @@ with tab1:
                     st.success(f"**Target:** ₹{target}")
                     st.error(f"**SL:** ₹{sl}")
     else:
-        st.error(f"Could not fetch intraday data for {stock_symbol}.")
+        st.error(f"❌ Data not found. Check spelling or ensure the symbol is correct.")
 
 # ---------- TAB 2: INDICES ----------
 with tab2:
     st.header("📈 Major Indices Scanner (15m)")
-    st.write("Special rules applied for indices (VWAP & Volume rules bypassed as index has no volume data).")
-
-    indices = {
-        "NIFTY 50": "^NSEI",
-        "BANK NIFTY": "^NSEBANK"
-    }
-
+    indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
     cols = st.columns(len(indices))
     
     for idx, (name, symbol) in enumerate(indices.items()):
@@ -241,7 +254,6 @@ with tab2:
                 result = analyze_stock(data, is_index=True)
                 if result:
                     signal, score, price, rsi, reasons = result
-                    
                     st.metric("LTP", f"₹{price}")
                     st.write(f"**RSI:** {rsi}")
                     
@@ -264,24 +276,24 @@ with tab2:
 # ---------- TAB 3: TOP 10 SCANNER ----------
 with tab3:
     st.header("⚡ Top 10 Stocks Scanner (15m Intraday)")
-    st.write("Scanning top liquid stocks for the best setups...")
-
-    nifty_list = [
-        "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","SBIN","BHARTIARTL",
-        "ITC","LT","BAJFINANCE","HCLTECH","ASIANPAINT","AXISBANK","MARUTI",
-        "SUNPHARMA","KOTAKBANK","TITAN","TATAMOTORS","ULTRACEMCO","NTPC",
-        "M&M","WIPRO","POWERGRID","BAJAJFINSV","ADANIENT","ONGC","COALINDIA",
-        "JSWSTEEL","TATASTEEL","HINDALCO"
+    
+    # Ab aap yahan direct company ka naam bhi likh sakte hain dictionary ki wajah se
+    scan_list = [
+        "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "SBI", 
+        "Godrej Properties", "ONGC", "Coal India", "PFC", "ITC", 
+        "LT", "BAJFINANCE", "HCLTECH", "ASIANPAINT", "AXISBANK", 
+        "MARUTI", "SUNPHARMA", "KOTAKBANK", "TATAMOTORS"
     ]
 
     if st.button("Start Top 10 Scan 🚀"):
         rows = []
         progress_bar = st.progress(0)
         
-        for i, s in enumerate(nifty_list):
-            progress_bar.progress((i + 1) / len(nifty_list))
+        for i, s in enumerate(scan_list):
+            progress_bar.progress((i + 1) / len(scan_list))
             
-            symbol = f"{s}.NS"
+            # Global function automatically map kar lega naam ko symbol se
+            symbol = get_ticker_symbol(s)
             data = yf.Ticker(symbol).history(period="5d", interval="15m")
             
             if not data.empty:
@@ -293,7 +305,7 @@ with tab3:
                         if trade:
                             option, entry, target, sl = trade
                             rows.append({
-                                "Stock": s,
+                                "Stock": s.upper(),
                                 "Signal": signal,
                                 "Score": score,
                                 "Option": option,
@@ -302,7 +314,6 @@ with tab3:
 
         if rows:
             df = pd.DataFrame(rows)
-            # CHANGED TO .head(10) FOR TOP 10 STOCKS
             df = df.sort_values(by="Score", ascending=False).head(10)
             df.index = np.arange(1, len(df) + 1)
             
