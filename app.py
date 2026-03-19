@@ -25,11 +25,13 @@ if stock:
         high=data['High'],
         low=data['Low'],
         close=data['Close']
-    )])
+    
+    rsi_value = latest['rsi']
 
-    st.plotly_chart(fig)
-
-    st.write(f"RSI: {latest['rsi']:.2f}")
+if pd.notna(rsi_value):
+    st.write(f"RSI: {float(rsi_value):.2f}")
+else:
+    st.write("RSI: Not available")
     st.write(f"Price: {latest['Close']:.2f}")
 
     if latest['Close'] > latest['ema50']:
