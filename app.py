@@ -1,99 +1,83 @@
+# app.py
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
-import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
-st.set_page_config(layout="wide")
-st.title("📊 Simple Option Trading Assistant")
+st.set_page_config(page_title="AI Option Trading Assistant", layout="wide")
+st.title("📊 AI Option Trading Assistant")
 
-# ================= SAFE =================
-def safe(v, d=0):
+# ----- User Input -----
+stock_input = st.text_input("Enter Stock (e.g. RELIANCE.NS)", value="RELIANCE.NS")
+
+# ----- Helper Functions -----
+def safe(x, default=50):
     try:
-        return float(v)
+        return float(x)
     except:
-        return d
+        return default
 
-# ================= OPTION =================
-def option_trade(price, signal):
-    strike = round(price / 50) * 50
-
-    if signal == "CALL":
-        return f"{strike} CE", price, round(price*1.03,2), round(price*0.98,2)
-
-    if signal == "PUT":
-        return f"{strike} PE", price, round(price*0.97,2), round(price*1.02,2)
-
-    return None
-
-# ================= ANALYSIS =================
 def analyze(data):
     data = data.copy().dropna()
-
-    close = data['Close']
+    close = pd.to_numeric(data['Close'], errors='coerce').dropna()
 
     # Indicators
-    data['ema20'] = ta.trend.EMAIndicator(close, 20).ema_indicator()
+    data['ema9'] = ta.trend.EMAIndicator(close, 9).ema_indicator()
+    data['ema21'] = ta.trend.EMAIndicator(close, 21).ema_indicator()
     data['ema50'] = ta.trend.EMAIndicator(close, 50).ema_indicator()
     data['rsi'] = ta.momentum.RSIIndicator(close).rsi()
+    data['supertrend'] = ta.trend.EMAIndicator(close, 10).ema_indicator()  # simplified Supertrend
 
     latest = data.iloc[-1]
-
     price = safe(latest['Close'])
-    ema20 = safe(latest['ema20'])
+    ema9 = safe(latest['ema9'])
+    ema21 = safe(latest['ema21'])
     ema50 = safe(latest['ema50'])
     rsi = safe(latest['rsi'],50)
 
-    # ===== LOGIC (CLEAN) =====
-    if price > ema20 and ema20 > ema50 and rsi < 60:
+    # ----- Trading Rules Logic -----
+    signal = "NO TRADE"
+    strike = "ATM"
+
+    # Basic rules (based on your rulebook)
+    if price > ema9 > ema21 and rsi < 65:
         signal = "CALL"
-    elif price < ema20 and ema20 < ema50 and rsi > 40:
+        if rsi < 45:
+            strike = "Slight ITM"
+    elif price < ema9 < ema21 and rsi > 35:
         signal = "PUT"
-    else:
+        if rsi > 55:
+            strike = "Slight ITM"
+
+    # Prevent overbought/oversold trades
+    if signal=="CALL" and rsi>70:
+        signal = "NO TRADE"
+    if signal=="PUT" and rsi<30:
         signal = "NO TRADE"
 
-    return signal, price, rsi, ema20, ema50
+    return signal, price, rsi, ema9, ema21, ema50, strike
 
-# ================= UI =================
-stock = st.text_input("Enter Stock", "RELIANCE.NS")
-
-if stock:
-    data = yf.download(stock, period="3mo", interval="1d")
-
+# ----- Fetch Data -----
+try:
+    end = datetime.now()
+    start = end - timedelta(days=7)
+    data = yf.download(stock_input, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d"), interval="15m")
     if data.empty:
-        st.error("Data nahi aa raha")
+        st.error("Error loading stock data")
     else:
-        signal, price, rsi, ema20, ema50 = analyze(data)
+        # ----- Analysis -----
+        signal, price, rsi, ema9, ema21, ema50, strike = analyze(data)
 
-        # Chart
-        fig = go.Figure(data=[go.Candlestick(
-            x=data.index,
-            open=data['Open'],
-            high=data['High'],
-            low=data['Low'],
-            close=data['Close']
-        )])
-        st.plotly_chart(fig, use_container_width=True)
+        st.subheader(f"Latest Analysis for {stock_input}")
+        st.write(f"Price: {price:.2f} | EMA9: {ema9:.2f} | EMA21: {ema21:.2f} | EMA50: {ema50:.2f} | RSI: {rsi:.2f}")
+        st.write(f"✅ Suggested Trade: **{signal}** | Recommended Strike: **{strike}**")
 
-        st.markdown("## 📊 TRADE OUTPUT")
+        # ----- Simple Recommendations -----
+        st.subheader("💡 Last Day Top Trades (Learning Purpose Only)")
+        last_day = data.tail(1)
+        st.write(last_day[['Open','High','Low','Close']])
 
-        st.write(f"💰 Price: {price}")
-        st.write(f"📉 RSI: {round(rsi,2)}")
-        st.write(f"📊 EMA20: {round(ema20,2)}")
-        st.write(f"📊 EMA50: {round(ema50,2)}")
-
-        st.write(f"## 🚀 Signal: {signal}")
-
-        # Trade setup
-        trade = option_trade(price, signal)
-
-        if trade:
-            option, entry, target, sl = trade
-
-            st.markdown("### 🎯 Trade Setup")
-            st.write(f"Option: {option}")
-            st.write(f"Entry: {entry}")
-            st.write(f"Target: {target}")
-            st.write(f"Stop Loss: {sl}")
-
-st.write("⚠️ For learning purpose only")
+        st.warning("⚠️ For learning purposes only. Do NOT trade real money blindly.")
+except Exception as e:
+    st.error(f"Failed to fetch data: {e}")
