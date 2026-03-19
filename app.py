@@ -10,62 +10,42 @@ st.title("📊 AI Option Trading Assistant")
 stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
 
 if stock:
-    try:
-        data = yf.download(stock, period="3mo", interval="1d")
+    data = yf.download(stock, period="3mo", interval="1d")
 
-        if not data.empty:
-            data.dropna(inplace=True)
+    if not data.empty:
+        data.dropna(inplace=True)
 
-            close_series = data['Close'].squeeze()
+        close_series = data['Close'].squeeze()
+        data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
 
-            data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
-            data['ema50'] = ta.trend.EMAIndicator(close_series, window=50).ema_indicator()
+        latest = data.iloc[-1]
 
-            latest = data.iloc[-1]
+        # Chart
+        fig = go.Figure(data=[go.Candlestick(
+            x=data.index,
+            open=data['Open'],
+            high=data['High'],
+            low=data['Low'],
+            close=data['Close']
+        )])
+        st.plotly_chart(fig)
 
-            # Chart
-            fig = go.Figure(data=[go.Candlestick(
-                x=data.index,
-                open=data['Open'],
-                high=data['High'],
-                low=data['Low'],
-                close=data['Close']
-            )])
-            st.plotly_chart(fig)
+        price = float(latest['Close'])
+        rsi = float(latest['rsi']) if pd.notna(latest['rsi']) else 50
 
-            # SAFE VALUES
-            rsi = float(latest['rsi']) if pd.notna(latest['rsi']) else 0
-            price = float(latest['Close'])
-            ema = float(latest['ema50']) if pd.notna(latest['ema50']) else price
+        st.write(f"Price: {price}")
+        st.write(f"RSI: {round(rsi,2)}")
 
-            st.write(f"Price: {round(price,2)}")
-            st.write(f"RSI: {round(rsi,2)}")
-
-            # Trend
-            if price > ema:
-                trend = "UPTREND"
-            else:
-                trend = "DOWNTREND"
-
-            st.subheader(f"Trend: {trend}")
-
-            # Signal
-            if rsi < 40:
-                st.success("✅ CALL (Buy Zone)")
-            elif rsi > 60:
-                st.error("❌ PUT (Sell Zone)")
-            else:
-                st.warning("⚠️ Sideways / No Trade")
-
+        if rsi < 40:
+            st.success("✅ CALL (Buy Zone)")
+        elif rsi > 60:
+            st.error("❌ PUT (Sell Zone)")
         else:
-            st.error("Stock data not found")
+            st.warning("⚠️ Sideways")
 
-    except Exception as e:
-        st.error("Error loading stock data")
+# ================= LIVE SCANNER =================
 
-# ================= SMART SCANNER =================
-
-st.header("🔥 Top 5 Opportunities")
+st.header("🔥 Live Market Scanner")
 
 stocks = [
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
@@ -77,49 +57,66 @@ results = []
 for s in stocks:
     try:
         data = yf.download(s, period="3mo", interval="1d")
-
-        if data.empty:
-            continue
-
         data.dropna(inplace=True)
 
         close_series = data['Close'].squeeze()
         data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
 
         latest = data.iloc[-1]
-
-        if pd.isna(latest['rsi']):
-            continue
-
         rsi = float(latest['rsi'])
 
-        signal = "HOLD"
-        score = 0
-
-        if rsi < 40:
-            signal = "CALL"
-            score = 100 - rsi
-        elif rsi > 60:
-            signal = "PUT"
-            score = rsi
-
-        if signal != "HOLD":
-            results.append({
-                "Stock": s,
-                "RSI": round(rsi,2),
-                "Signal": signal,
-                "Score": round(score,2)
-            })
+        if rsi < 45:
+            results.append({"Stock": s, "Signal": "CALL", "RSI": round(rsi,2)})
+        elif rsi > 55:
+            results.append({"Stock": s, "Signal": "PUT", "RSI": round(rsi,2)})
 
     except:
         continue
 
-# Show top 5
 if results:
     df = pd.DataFrame(results)
-    df = df.sort_values(by="Score", ascending=False).head(5)
-    st.dataframe(df)
+    st.dataframe(df.head(5))
 else:
-    st.write("No signals right now")
+    st.write("No strong live signals")
+
+# ================= LAST DAY BEST =================
+
+st.header("🔥 Last Day Best Trades (Guaranteed)")
+
+last_day_results = []
+
+for s in stocks:
+    try:
+        data = yf.download(s, period="5d", interval="1d")
+        data.dropna(inplace=True)
+
+        if len(data) < 2:
+            continue
+
+        prev = data.iloc[-2]
+        curr = data.iloc[-1]
+
+        change = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
+
+        signal = "CALL" if change > 0 else "PUT"
+
+        last_day_results.append({
+            "Stock": s,
+            "Change %": round(change,2),
+            "Signal": signal
+        })
+
+    except:
+        continue
+
+if last_day_results:
+    df2 = pd.DataFrame(last_day_results)
+    df2 = df2.sort_values(by="Change %", ascending=False)
+
+    st.subheader("📈 Top Gainers (CALL)")
+    st.dataframe(df2.head(3))
+
+    st.subheader("📉 Top Losers (PUT)")
+    st.dataframe(df2.tail(3))
 
 st.write("⚠️ For learning purpose only")
