@@ -3,11 +3,9 @@ import yfinance as yf
 import pandas as pd
 import ta
 import plotly.graph_objects as go
-import datetime as dt
-from zoneinfo import ZoneInfo
 
 st.set_page_config(layout="wide")
-st.title("📊 AI Option Trading Assistant (Live + Stable)")
+st.title("📊 Simple Option Trading Assistant")
 
 # ================= SAFE =================
 def safe(v, d=0):
@@ -16,104 +14,56 @@ def safe(v, d=0):
     except:
         return d
 
-# ================= MARKET MODE =================
-def fetch_data(symbol):
-    ist = ZoneInfo("Asia/Kolkata")
-    now = dt.datetime.now(ist).time()
-
-    market_open = dt.time(9, 15)
-    market_close = dt.time(15, 30)
-
-    if market_open <= now <= market_close:
-        period = "5d"
-        interval = "5m"
-        mode = "LIVE (Intraday)"
-    else:
-        period = "3mo"
-        interval = "1d"
-        mode = "CLOSED (EOD Data)"
-
-    data = yf.download(symbol, period=period, interval=interval, progress=False)
-
-    return data, mode
-
 # ================= OPTION =================
 def option_trade(price, signal):
     strike = round(price / 50) * 50
 
-    if "CALL" in signal:
-        return f"{strike} CE", price, round(price*1.02,2), round(price*0.99,2)
+    if signal == "CALL":
+        return f"{strike} CE", price, round(price*1.03,2), round(price*0.98,2)
 
-    if "PUT" in signal:
-        return f"{strike} PE", price, round(price*0.98,2), round(price*1.01,2)
+    if signal == "PUT":
+        return f"{strike} PE", price, round(price*0.97,2), round(price*1.02,2)
 
     return None
 
 # ================= ANALYSIS =================
 def analyze(data):
-    try:
-        data = data.copy().dropna()
+    data = data.copy().dropna()
 
-        if len(data) < 20:
-            return "NO DATA", 0, 0, 0, []
+    close = data['Close']
 
-        close = data['Close']
+    # Indicators
+    data['ema20'] = ta.trend.EMAIndicator(close, 20).ema_indicator()
+    data['ema50'] = ta.trend.EMAIndicator(close, 50).ema_indicator()
+    data['rsi'] = ta.momentum.RSIIndicator(close).rsi()
 
-        # Indicators
-        data['ema9'] = ta.trend.EMAIndicator(close, 9).ema_indicator()
-        data['ema21'] = ta.trend.EMAIndicator(close, 21).ema_indicator()
-        data['rsi'] = ta.momentum.RSIIndicator(close).rsi()
+    latest = data.iloc[-1]
 
-        latest = data.iloc[-1]
-        prev = data.iloc[-2]
+    price = safe(latest['Close'])
+    ema20 = safe(latest['ema20'])
+    ema50 = safe(latest['ema50'])
+    rsi = safe(latest['rsi'],50)
 
-        price = safe(latest['Close'])
-        ema9 = safe(latest['ema9'])
-        ema21 = safe(latest['ema21'])
-        rsi = safe(latest['rsi'],50)
+    # ===== LOGIC (CLEAN) =====
+    if price > ema20 and ema20 > ema50 and rsi < 60:
+        signal = "CALL"
+    elif price < ema20 and ema20 < ema50 and rsi > 40:
+        signal = "PUT"
+    else:
+        signal = "NO TRADE"
 
-        score = 0
-        checks = []
-
-        # RULES (balanced)
-        if ema9 > ema21:
-            score += 1
-            checks.append("EMA Bullish")
-
-        if price > prev['Close']:
-            score += 1
-            checks.append("Price Up")
-
-        if 40 < rsi < 65:
-            score += 1
-            checks.append("RSI Healthy")
-
-        if rsi < 70:
-            score += 1
-
-        # SIGNAL
-        if score >= 3:
-            signal = "🔥 CALL"
-        elif score <= 1:
-            signal = "🔥 PUT"
-        else:
-            signal = "SIDEWAYS"
-
-        return signal, score, price, rsi, checks
-
-    except:
-        return "ERROR", 0, 0, 0, []
+    return signal, price, rsi, ema20, ema50
 
 # ================= UI =================
-stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
+stock = st.text_input("Enter Stock", "RELIANCE.NS")
 
 if stock:
-    data, mode = fetch_data(stock)
+    data = yf.download(stock, period="3mo", interval="1d")
 
     if data.empty:
-        st.error("❌ Data nahi aa raha (symbol check kar)")
+        st.error("Data nahi aa raha")
     else:
-        signal, score, price, rsi, checks = analyze(data)
+        signal, price, rsi, ema20, ema50 = analyze(data)
 
         # Chart
         fig = go.Figure(data=[go.Candlestick(
@@ -125,25 +75,16 @@ if stock:
         )])
         st.plotly_chart(fig, use_container_width=True)
 
-        # Mode show
-        st.info(f"📡 Mode: {mode}")
+        st.markdown("## 📊 TRADE OUTPUT")
 
-        # Confidence
-        confidence = min(90, max(50, abs(score)*15))
-
-        if score >= 3:
-            risk = "LOW"
-        elif score == 2:
-            risk = "MEDIUM"
-        else:
-            risk = "HIGH"
-
-        st.markdown("## 🚀 TRADE DECISION")
-        st.write(f"### {signal}")
-        st.write(f"📈 Confidence: {confidence}%")
         st.write(f"💰 Price: {price}")
+        st.write(f"📉 RSI: {round(rsi,2)}")
+        st.write(f"📊 EMA20: {round(ema20,2)}")
+        st.write(f"📊 EMA50: {round(ema50,2)}")
 
-        # Trade
+        st.write(f"## 🚀 Signal: {signal}")
+
+        # Trade setup
         trade = option_trade(price, signal)
 
         if trade:
@@ -154,46 +95,5 @@ if stock:
             st.write(f"Entry: {entry}")
             st.write(f"Target: {target}")
             st.write(f"Stop Loss: {sl}")
-
-        st.markdown("### 🧠 Why this trade?")
-        for c in checks:
-            st.write(f"✔️ {c}")
-
-        st.write(f"⚠️ Risk Level: {risk}")
-
-# ================= SCANNER =================
-st.header("🔥 Smart Scanner")
-
-stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","SBIN.NS","ICICIBANK.NS"]
-
-rows = []
-
-for s in stocks:
-    try:
-        data, _ = fetch_data(s)
-
-        if data.empty:
-            continue
-
-        signal, score, price, rsi, _ = analyze(data)
-
-        confidence = min(90, max(50, abs(score)*15))
-
-        rows.append({
-            "Stock": s,
-            "Signal": signal,
-            "Confidence": confidence,
-            "Price": price
-        })
-
-    except:
-        continue
-
-if rows:
-    df = pd.DataFrame(rows)
-    df = df.sort_values(by="Confidence", ascending=False)
-    st.dataframe(df, use_container_width=True)
-else:
-    st.write("No data")
 
 st.write("⚠️ For learning purpose only")
