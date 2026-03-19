@@ -3,9 +3,11 @@ import yfinance as yf
 import pandas as pd
 import ta
 import plotly.graph_objects as go
+import datetime as dt
+from zoneinfo import ZoneInfo
 
 st.set_page_config(layout="wide")
-st.title("📊 AI Option Trading Assistant (Fixed Version)")
+st.title("📊 AI Option Trading Assistant (Live + Stable)")
 
 # ================= SAFE =================
 def safe(v, d=0):
@@ -13,6 +15,27 @@ def safe(v, d=0):
         return float(v)
     except:
         return d
+
+# ================= MARKET MODE =================
+def fetch_data(symbol):
+    ist = ZoneInfo("Asia/Kolkata")
+    now = dt.datetime.now(ist).time()
+
+    market_open = dt.time(9, 15)
+    market_close = dt.time(15, 30)
+
+    if market_open <= now <= market_close:
+        period = "5d"
+        interval = "5m"
+        mode = "LIVE (Intraday)"
+    else:
+        period = "3mo"
+        interval = "1d"
+        mode = "CLOSED (EOD Data)"
+
+    data = yf.download(symbol, period=period, interval=interval, progress=False)
+
+    return data, mode
 
 # ================= OPTION =================
 def option_trade(price, signal):
@@ -31,7 +54,7 @@ def analyze(data):
     try:
         data = data.copy().dropna()
 
-        if len(data) < 30:
+        if len(data) < 20:
             return "NO DATA", 0, 0, 0, []
 
         close = data['Close']
@@ -52,7 +75,7 @@ def analyze(data):
         score = 0
         checks = []
 
-        # SIMPLE RULES (loosened)
+        # RULES (balanced)
         if ema9 > ema21:
             score += 1
             checks.append("EMA Bullish")
@@ -61,19 +84,18 @@ def analyze(data):
             score += 1
             checks.append("Price Up")
 
-        if rsi < 60:
+        if 40 < rsi < 65:
             score += 1
-            checks.append("RSI Safe")
+            checks.append("RSI Healthy")
 
-        if rsi > 40:
+        if rsi < 70:
             score += 1
-            checks.append("Momentum OK")
 
-        # SIGNAL (loose threshold)
+        # SIGNAL
         if score >= 3:
-            signal = "CALL"
+            signal = "🔥 CALL"
         elif score <= 1:
-            signal = "PUT"
+            signal = "🔥 PUT"
         else:
             signal = "SIDEWAYS"
 
@@ -83,72 +105,84 @@ def analyze(data):
         return "ERROR", 0, 0, 0, []
 
 # ================= UI =================
-stock = st.text_input("Enter Stock", "RELIANCE.NS")
+stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
 
 if stock:
-    try:
-        data = yf.download(stock, period="1mo", interval="1d")
+    data, mode = fetch_data(stock)
 
-        if data.empty:
-            st.error("❌ Data not coming (check stock name)")
+    if data.empty:
+        st.error("❌ Data nahi aa raha (symbol check kar)")
+    else:
+        signal, score, price, rsi, checks = analyze(data)
+
+        # Chart
+        fig = go.Figure(data=[go.Candlestick(
+            x=data.index,
+            open=data['Open'],
+            high=data['High'],
+            low=data['Low'],
+            close=data['Close']
+        )])
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Mode show
+        st.info(f"📡 Mode: {mode}")
+
+        # Confidence
+        confidence = min(90, max(50, abs(score)*15))
+
+        if score >= 3:
+            risk = "LOW"
+        elif score == 2:
+            risk = "MEDIUM"
         else:
-            result = analyze(data)
-            signal, score, price, rsi, checks = result
+            risk = "HIGH"
 
-            # Chart
-            fig = go.Figure(data=[go.Candlestick(
-                x=data.index,
-                open=data['Open'],
-                high=data['High'],
-                low=data['Low'],
-                close=data['Close']
-            )])
-            st.plotly_chart(fig, use_container_width=True)
+        st.markdown("## 🚀 TRADE DECISION")
+        st.write(f"### {signal}")
+        st.write(f"📈 Confidence: {confidence}%")
+        st.write(f"💰 Price: {price}")
 
-            st.markdown("## 🚀 TRADE OUTPUT")
+        # Trade
+        trade = option_trade(price, signal)
 
-            st.write(f"Signal: {signal}")
-            st.write(f"Score: {score}")
-            st.write(f"Price: {price}")
-            st.write(f"RSI: {rsi}")
+        if trade:
+            option, entry, target, sl = trade
 
-            # OPTION
-            trade = option_trade(price, signal)
+            st.markdown("### 🎯 Trade Setup")
+            st.write(f"Option: {option}")
+            st.write(f"Entry: {entry}")
+            st.write(f"Target: {target}")
+            st.write(f"Stop Loss: {sl}")
 
-            if trade:
-                option, entry, target, sl = trade
-                st.markdown("### 🎯 Trade Setup")
-                st.write(f"Option: {option}")
-                st.write(f"Entry: {entry}")
-                st.write(f"Target: {target}")
-                st.write(f"SL: {sl}")
+        st.markdown("### 🧠 Why this trade?")
+        for c in checks:
+            st.write(f"✔️ {c}")
 
-            st.markdown("### 🧠 Checks")
-            for c in checks:
-                st.write(f"✔️ {c}")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
+        st.write(f"⚠️ Risk Level: {risk}")
 
 # ================= SCANNER =================
-st.header("🔥 Scanner")
+st.header("🔥 Smart Scanner")
 
-stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","SBIN.NS"]
+stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","SBIN.NS","ICICIBANK.NS"]
 
 rows = []
 
 for s in stocks:
     try:
-        data = yf.download(s, period="1mo", interval="1d")
+        data, _ = fetch_data(s)
 
         if data.empty:
             continue
 
         signal, score, price, rsi, _ = analyze(data)
 
+        confidence = min(90, max(50, abs(score)*15))
+
         rows.append({
             "Stock": s,
             "Signal": signal,
+            "Confidence": confidence,
             "Price": price
         })
 
@@ -157,7 +191,8 @@ for s in stocks:
 
 if rows:
     df = pd.DataFrame(rows)
-    st.dataframe(df)
+    df = df.sort_values(by="Confidence", ascending=False)
+    st.dataframe(df, use_container_width=True)
 else:
     st.write("No data")
 
