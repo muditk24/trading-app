@@ -5,28 +5,28 @@ import ta
 import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("📊 AI Option Trading Assistant (Rulebook Pro)")
+st.title("📊 AI Option Trading Assistant (Pro UI)")
 
-# ================= SAFE FLOAT =================
+# ================= SAFE =================
 def safe(v, d=0):
     try:
         return float(v)
     except:
         return d
 
-# ================= OPTION LOGIC =================
+# ================= OPTION =================
 def option_trade(price, signal):
     strike = round(price / 50) * 50
 
-    if signal == "CALL":
+    if "CALL" in signal:
         return f"{strike} CE", price, round(price*1.02,2), round(price*0.99,2)
 
-    if signal == "PUT":
+    if "PUT" in signal:
         return f"{strike} PE", price, round(price*0.98,2), round(price*1.01,2)
 
     return None
 
-# ================= CORE RULE ENGINE =================
+# ================= ANALYSIS =================
 def analyze(data):
     try:
         data = data.copy()
@@ -42,7 +42,7 @@ def analyze(data):
         data['ema21'] = ta.trend.EMAIndicator(close, 21).ema_indicator()
         data['rsi'] = ta.momentum.RSIIndicator(close).rsi()
 
-        data['vwap'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close'])/3).cumsum() / data['Volume'].cumsum()
+        data['vwap'] = (data['Volume'] * (data['High']+data['Low']+data['Close'])/3).cumsum() / data['Volume'].cumsum()
 
         latest = data.iloc[-1]
         prev = data.iloc[-2]
@@ -59,56 +59,52 @@ def analyze(data):
         score = 0
         checks = []
 
-        # ===== CHECKS =====
-
-        # 1 EMA crossover
+        # RULES
         if ema9 > ema21:
             score += 1
             checks.append("EMA Bullish")
         else:
             score -= 1
 
-        # 2 candle close
         if price > prev['Close']:
             score += 1
             checks.append("Candle Up")
         else:
             score -= 1
 
-        # 3 RSI range
         if 45 <= rsi <= 65:
             score += 1
             checks.append("RSI Good")
 
-        # 4 RSI filter
         if rsi < 70:
             score += 1
         else:
             score -= 1
 
-        # 5 VWAP
         if price > vwap:
             score += 1
             checks.append("Above VWAP")
         else:
             score -= 1
 
-        # 6 Volume
         if volume > avg_vol:
             score += 1
             checks.append("Volume High")
 
-        # 7 Breakout
         if price > prev['High']:
             score += 2
             checks.append("Breakout Up")
         elif price < prev['Low']:
             score -= 2
 
-        # ===== SIGNAL =====
+        # FINAL SIGNAL
         if score >= 5:
+            signal = "🔥 STRONG CALL"
+        elif score >= 3:
             signal = "CALL"
         elif score <= -5:
+            signal = "🔥 STRONG PUT"
+        elif score <= -3:
             signal = "PUT"
         else:
             signal = "NO TRADE"
@@ -119,7 +115,7 @@ def analyze(data):
         return None
 
 # ================= UI =================
-stock = st.text_input("Enter Stock", "RELIANCE.NS")
+stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
 
 if stock:
     data = yf.download(stock, period="3mo", interval="1d")
@@ -140,29 +136,41 @@ if stock:
             )])
             st.plotly_chart(fig, use_container_width=True)
 
-            st.subheader("📊 Summary")
-            st.write(f"Price: {price}")
-            st.write(f"RSI: {rsi}")
-            st.write(f"Score: {score}")
-            st.write(f"Signal: {signal}")
+            # CONFIDENCE
+            confidence = min(90, max(50, abs(score)*10))
 
-            st.subheader("🧠 Checks Passed")
+            if score >= 5:
+                risk = "LOW"
+            elif abs(score) >= 3:
+                risk = "MEDIUM"
+            else:
+                risk = "HIGH"
+
+            st.markdown("## 🚀 TRADE DECISION")
+            st.write(f"### {signal}")
+            st.write(f"📈 Confidence: {confidence}%")
+            st.write(f"💰 Price: {price}")
+
+            if signal != "NO TRADE":
+                trade = option_trade(price, signal)
+
+                if trade:
+                    option, entry, target, sl = trade
+
+                    st.markdown("### 🎯 Trade Setup")
+                    st.write(f"Option: {option}")
+                    st.write(f"Entry: {entry}")
+                    st.write(f"Target: {target}")
+                    st.write(f"Stop Loss: {sl}")
+
+            st.markdown("### 🧠 Why this trade?")
             for c in checks:
                 st.write(f"✔️ {c}")
 
-            trade = option_trade(price, signal)
-
-            if trade:
-                option, entry, target, sl = trade
-
-                st.subheader("📊 Trade Setup")
-                st.write(f"Option: {option}")
-                st.write(f"Entry: {entry}")
-                st.write(f"Target: {target}")
-                st.write(f"SL: {sl}")
+            st.write(f"⚠️ Risk Level: {risk}")
 
 # ================= SCANNER =================
-st.header("🔥 Scanner")
+st.header("🔥 Smart Scanner")
 
 stocks = [
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS",
@@ -183,6 +191,8 @@ for s in stocks:
         signal, score, price, rsi, _ = result
 
         if signal != "NO TRADE":
+            confidence = min(90, max(50, abs(score)*10))
+
             trade = option_trade(price, signal)
 
             if trade:
@@ -191,6 +201,7 @@ for s in stocks:
                 rows.append({
                     "Stock": s,
                     "Signal": signal,
+                    "Confidence": confidence,
                     "Option": option,
                     "Entry": entry,
                     "Target": target,
@@ -199,7 +210,8 @@ for s in stocks:
 
 if rows:
     df = pd.DataFrame(rows)
-    st.dataframe(df)
+    df = df.sort_values(by="Confidence", ascending=False)
+    st.dataframe(df, use_container_width=True)
 else:
     st.write("No trades found")
 
