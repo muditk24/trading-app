@@ -8,36 +8,41 @@ import numpy as np
 # UI Setup
 st.set_page_config(page_title="Pro Options Trader", layout="wide", page_icon="📈")
 
-# ================= SMART DICTIONARY (GLOBAL) =================
-# Ab yeh pure app mein kahin bhi kaam karega
+# ================= MASTER STOCK LIST =================
+# Dropdown ke liye saaf naam aur unke Yahoo symbols
 STOCK_MAP = {
-    "GODREJ PROPERTIES": "GODREJPROP",
-    "GODREJ CONSUMER": "GODREJCP",
-    "GODREJ": "GODREJCP", # Default godrej
-    "STATE BANK OF INDIA": "SBIN",
-    "SBI": "SBIN",
-    "HDFC BANK": "HDFCBANK",
-    "RELIANCE INDUSTRIES": "RELIANCE",
-    "TATA MOTORS": "TATAMOTORS",
-    "BAJAJ FINANCE": "BAJFINANCE",
-    "COAL INDIA": "COALINDIA",
-    "ONGC": "ONGC",
-    "POWER FINANCE": "PFC",
-    "PFC": "PFC",
-    "TCS": "TCS",
-    "INFY": "INFY"
+    "RELIANCE INDUSTRIES": "RELIANCE.NS",
+    "HDFC BANK": "HDFCBANK.NS",
+    "ICICI BANK": "ICICIBANK.NS",
+    "STATE BANK OF INDIA (SBI)": "SBIN.NS",
+    "TCS": "TCS.NS",
+    "INFOSYS": "INFY.NS",
+    "GODREJ PROPERTIES": "GODREJPROP.NS",
+    "GODREJ CONSUMER": "GODREJCP.NS",
+    "POWER FINANCE (PFC)": "PFC.NS",
+    "ONGC": "ONGC.NS",
+    "COAL INDIA": "COALINDIA.NS",
+    "TATA MOTORS": "TATAMOTORS.NS",
+    "BAJAJ FINANCE": "BAJFINANCE.NS",
+    "ITC": "ITC.NS",
+    "LARSEN & TOUBRO (LT)": "LT.NS",
+    "ASIAN PAINTS": "ASIANPAINT.NS",
+    "AXIS BANK": "AXISBANK.NS",
+    "MARUTI SUZUKI": "MARUTI.NS",
+    "SUN PHARMA": "SUNPHARMA.NS",
+    "KOTAK MAHINDRA BANK": "KOTAKBANK.NS",
+    "TITAN": "TITAN.NS",
+    "ULTRATECH CEMENT": "ULTRACEMCO.NS",
+    "NTPC": "NTPC.NS",
+    "MAHINDRA & MAHINDRA": "M&M.NS",
+    "WIPRO": "WIPRO.NS",
+    "POWER GRID": "POWERGRID.NS",
+    "BAJAJ FINSERV": "BAJAJFINSV.NS",
+    "ADANI ENTERPRISES": "ADANIENT.NS",
+    "JSW STEEL": "JSWSTEEL.NS",
+    "TATA STEEL": "TATASTEEL.NS",
+    "HINDALCO": "HINDALCO.NS"
 }
-
-def get_ticker_symbol(name):
-    """Company ka naam lega aur exact Yahoo Finance symbol return karega"""
-    name_upper = str(name).upper().strip()
-    # Check if name is in dictionary, else use the raw name
-    base_symbol = STOCK_MAP.get(name_upper, name_upper)
-    
-    # Agar index nahi hai aur .NS nahi laga hai, toh laga do
-    if not base_symbol.endswith(".NS") and not base_symbol.startswith("^"):
-        return f"{base_symbol}.NS"
-    return base_symbol
 
 # ================= SAFE FLOAT =================
 def safe_float(val, default=0):
@@ -135,7 +140,6 @@ def analyze_stock(data, is_index=False):
         put_score = 0
         reasons = []
 
-        # --- CALL RULES ---
         if ema9 > ema21 and price > ema9 and price > open_price: 
             call_score += 2; reasons.append("EMA 9>21 & Closed Above")
         if supertrend_green: 
@@ -151,7 +155,6 @@ def analyze_stock(data, is_index=False):
             if volume > avg_vol: 
                 call_score += 1; reasons.append("Volume Spike")
 
-        # --- PUT RULES ---
         if ema9 < ema21 and price < ema9 and price < open_price: 
             put_score += 2; reasons.append("EMA 9<21 & Closed Below")
         if not supertrend_green: 
@@ -191,53 +194,66 @@ tab1, tab2, tab3 = st.tabs(["📊 Single Stock Analysis", "📈 Nifty & BankNift
 
 # ---------- TAB 1: SINGLE STOCK ----------
 with tab1:
-    user_input = st.text_input("🔍 Search Any Stock (Name or Symbol):", "Godrej Properties")
-
-    # Global function use kiya
-    stock_symbol = get_ticker_symbol(user_input)
-
-    st.header(f"Intraday Analysis (15m) for {stock_symbol.replace('.NS', '')}")
+    # Dropdown list create karna (sare map ke naam + Ek Custom option)
+    dropdown_options = list(STOCK_MAP.keys()) + ["➕ OTHER (Type Custom Symbol)"]
     
-    with st.spinner('Fetching 15m intraday data...'):
-        data = yf.Ticker(stock_symbol).history(period="5d", interval="15m")
+    # Selectbox Streamlit ka
+    selected_name = st.selectbox("🔍 Select a Stock to Analyze:", options=dropdown_options)
 
-    if not data.empty:
-        result = analyze_stock(data)
-        if result:
-            signal, score, price, rsi, reasons = result
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Current Price", f"₹{price}")
-            col2.metric("RSI", rsi)
-            col3.metric("Rule Score", score)
-            
-            if "CALL" in signal: col4.success(signal)
-            elif "PUT" in signal: col4.error(signal)
-            else: col4.warning(signal)
+    stock_symbol = None
 
-            st.markdown("---")
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                fig = go.Figure(data=[go.Candlestick(
-                    x=data.index, open=data['Open'], high=data['High'],
-                    low=data['Low'], close=data['Close'], name="Price"
-                )])
-                fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400)
-                st.plotly_chart(fig, use_container_width=True)
-
-            with c2:
-                st.subheader("🧠 Rulebook Checklist")
-                for r in reasons:
-                    st.write(f"✔️ {r}")
-                
-                trade = option_trade(stock_symbol, price, signal)
-                if trade and "NO TRADE" not in signal:
-                    st.markdown("### 🎯 Trade Setup")
-                    option, entry, target, sl = trade
-                    st.info(f"**Strike to Buy:** ATM or 1 OTM ({option})")
-                    st.success(f"**Target:** ₹{target}")
-                    st.error(f"**SL:** ₹{sl}")
+    # Logic: Agar 'Other' select kiya toh text box dikhao
+    if selected_name == "➕ OTHER (Type Custom Symbol)":
+        custom_input = st.text_input("Enter exact NSE Symbol (e.g., ZOMATO):").upper().strip()
+        if custom_input:
+            stock_symbol = custom_input if custom_input.endswith(".NS") else f"{custom_input}.NS"
     else:
-        st.error(f"❌ Data not found. Check spelling or ensure the symbol is correct.")
+        stock_symbol = STOCK_MAP[selected_name]
+
+    # Data tabhi fetch hoga jab stock_symbol available ho
+    if stock_symbol:
+        st.header(f"Intraday Analysis (15m) for {stock_symbol.replace('.NS', '')}")
+        
+        with st.spinner('Fetching 15m intraday data...'):
+            data = yf.Ticker(stock_symbol).history(period="5d", interval="15m")
+
+        if not data.empty:
+            result = analyze_stock(data)
+            if result:
+                signal, score, price, rsi, reasons = result
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Current Price", f"₹{price}")
+                col2.metric("RSI", rsi)
+                col3.metric("Rule Score", score)
+                
+                if "CALL" in signal: col4.success(signal)
+                elif "PUT" in signal: col4.error(signal)
+                else: col4.warning(signal)
+
+                st.markdown("---")
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    fig = go.Figure(data=[go.Candlestick(
+                        x=data.index, open=data['Open'], high=data['High'],
+                        low=data['Low'], close=data['Close'], name="Price"
+                    )])
+                    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with c2:
+                    st.subheader("🧠 Rulebook Checklist")
+                    for r in reasons:
+                        st.write(f"✔️ {r}")
+                    
+                    trade = option_trade(stock_symbol, price, signal)
+                    if trade and "NO TRADE" not in signal:
+                        st.markdown("### 🎯 Trade Setup")
+                        option, entry, target, sl = trade
+                        st.info(f"**Strike to Buy:** ATM or 1 OTM ({option})")
+                        st.success(f"**Target:** ₹{target}")
+                        st.error(f"**SL:** ₹{sl}")
+        else:
+            st.error(f"❌ Data not found for {stock_symbol}. Check symbol name.")
 
 # ---------- TAB 2: INDICES ----------
 with tab2:
@@ -277,23 +293,17 @@ with tab2:
 with tab3:
     st.header("⚡ Top 10 Stocks Scanner (15m Intraday)")
     
-    # Ab aap yahan direct company ka naam bhi likh sakte hain dictionary ki wajah se
-    scan_list = [
-        "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "SBI", 
-        "Godrej Properties", "ONGC", "Coal India", "PFC", "ITC", 
-        "LT", "BAJFINANCE", "HCLTECH", "ASIANPAINT", "AXISBANK", 
-        "MARUTI", "SUNPHARMA", "KOTAKBANK", "TATAMOTORS"
-    ]
+    # Ab hum direct STOCK_MAP ki values (symbols) utha lenge scanner ke liye
+    scan_list = list(STOCK_MAP.keys())
 
     if st.button("Start Top 10 Scan 🚀"):
         rows = []
         progress_bar = st.progress(0)
         
-        for i, s in enumerate(scan_list):
+        for i, name in enumerate(scan_list):
             progress_bar.progress((i + 1) / len(scan_list))
             
-            # Global function automatically map kar lega naam ko symbol se
-            symbol = get_ticker_symbol(s)
+            symbol = STOCK_MAP[name]
             data = yf.Ticker(symbol).history(period="5d", interval="15m")
             
             if not data.empty:
@@ -305,7 +315,8 @@ with tab3:
                         if trade:
                             option, entry, target, sl = trade
                             rows.append({
-                                "Stock": s.upper(),
+                                "Stock Name": name,
+                                "Symbol": symbol.replace('.NS', ''),
                                 "Signal": signal,
                                 "Score": score,
                                 "Option": option,
@@ -323,3 +334,4 @@ with tab3:
             )
         else:
             st.warning("Koi solid intraday setup nahi mila. Market range-bound hai.")
+   
