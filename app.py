@@ -4,6 +4,9 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 import numpy as np
+import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # ================= UI SETUP =================
@@ -54,7 +57,6 @@ def safe_float(val, default=0):
     except: return default
 
 def analyze_sentiment(headline):
-    """Headline ko padh kar basic sentiment nikalta hai"""
     text = str(headline).lower()
     positive_words = ['surges', 'jumps', 'gains', 'profit', 'growth', 'buy', 'bullish', 'record', 'dividend', 'wins', 'order', 'up', 'high', 'soars', 'approves', 'positive']
     negative_words = ['falls', 'drops', 'loss', 'declines', 'sell', 'bearish', 'misses', 'downgrade', 'penalty', 'crash', 'slips', 'down', 'low', 'plummets', 'weak', 'negative', 'resigns']
@@ -65,6 +67,28 @@ def analyze_sentiment(headline):
     if pos_count > neg_count: return "🟢 Positive"
     elif neg_count > pos_count: return "🔴 Negative"
     else: return "⚪ Neutral"
+
+def get_indian_news(company_name):
+    query = urllib.parse.quote(f"{company_name} stock news india")
+    url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            xml_data = response.read()
+        
+        root = ET.fromstring(xml_data)
+        news_items = []
+        
+        for item in root.findall('.//item')[:2]: 
+            title = item.find('title').text
+            link = item.find('link').text
+            clean_title = title.rsplit(' - ', 1)[0] if ' - ' in title else title
+            news_items.append({'title': clean_title, 'link': link})
+            
+        return news_items
+    except Exception as e:
+        return []
 
 # ================= CUSTOM INDICATORS =================
 def calculate_vwap(df):
@@ -181,7 +205,7 @@ def analyze_stock(data, is_index=False):
 # ================= UI LAYOUT =================
 st.title("📊 AI Option Trading Assistant (Pro Detailed)")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Single Stock Analysis", "📈 Nifty & BankNifty Setup", "🔥 Top 10 Stocks Scanner", "📰 Market News & Sentiment"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Single Stock Analysis", "📈 Nifty & BankNifty", "🔥 Top 10 Scanner", "📰 Live Indian News"])
 
 # ---------- TAB 1: SINGLE STOCK ----------
 with tab1:
@@ -283,10 +307,10 @@ with tab3:
             st.dataframe(df.style.map(lambda x: 'color: green' if 'CALL' in str(x) else ('color: red' if 'PUT' in str(x) else ''), subset=['Signal']), use_container_width=True)
         else: st.warning("Koi solid intraday setup nahi mila. Market range-bound hai.")
 
-# ---------- TAB 4: NEWS & SENTIMENT + TECH ALIGNMENT ----------
+# ---------- TAB 4: LIVE INDIAN NEWS & SENTIMENT + TECH ALIGNMENT ----------
 with tab4:
-    st.header("📰 Live Market News + Technical Alignment")
-    st.write("Finding deadly combos: Combining latest news sentiment with your 15m Technical Rulebook...")
+    st.header("📰 Live Indian Market News + Technical Alignment")
+    st.write("Fetching real-time news directly from Indian Financial Portals and aligning with Tech Signals...")
     
     top_15_leaders = [
         "RELIANCE", "HDFC BANK", "TCS", "INFOSYS", "ICICI BANK", 
@@ -294,7 +318,7 @@ with tab4:
         "AXIS BANK", "TATA MOTORS", "M&M", "MARUTI", "BAJAJ FINANCE"
     ]
 
-    if st.button("Fetch News & Align Tech 🚀"):
+    if st.button("Fetch Live News & Align Tech 🚀"):
         news_rows = []
         news_progress = st.progress(0)
         
@@ -303,12 +327,11 @@ with tab4:
             symbol = STOCK_MAP[name]
             
             try:
-                # 1. Fetching News
-                ticker = yf.Ticker(symbol)
-                news_data = ticker.news
+                # 1. Fetching LIVE Indian News
+                live_news = get_indian_news(name)
                 
                 # 2. Fetching Technical Data
-                data = ticker.history(period="5d", interval="15m")
+                data = yf.Ticker(symbol).history(period="5d", interval="15m")
                 tech_signal = "⚪ NO TRADE"
                 option_detail = "-"
                 
@@ -319,18 +342,16 @@ with tab4:
                         signal, score, price, rsi, _ = result
                         tech_signal = signal
                         
-                        # Generate Entry, Target, SL if trade is valid
                         if "NO TRADE" not in signal:
                             trade = option_trade(symbol, price, signal)
                             if trade:
                                 option_detail = f"{trade[0]} | TGT: {trade[2]} | SL: {trade[3]}"
                 
                 # 4. Combining News with Technical Setup
-                if news_data:
-                    for item in news_data[:2]: 
-                        headline = item.get("title", "")
-                        link = item.get("link", "")
-                        
+                if live_news:
+                    for item in live_news: 
+                        headline = item['title']
+                        link = item['link']
                         sentiment = analyze_sentiment(headline)
                         
                         news_rows.append({
@@ -346,7 +367,6 @@ with tab4:
                 
         if news_rows:
             news_df = pd.DataFrame(news_rows)
-            
             st.dataframe(
                 news_df.style.map(lambda x: 'color: green' if 'CALL' in str(x) else ('color: red' if 'PUT' in str(x) else ''), subset=['Tech Signal']),
                 column_config={
@@ -357,3 +377,5 @@ with tab4:
             )
         else:
             st.info("No major news updates available at this moment.")
+
+        
