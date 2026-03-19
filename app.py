@@ -136,14 +136,17 @@ def analyze_stock(data):
 
         return signal, score, price, rsi, reasons
 
-    except:
+    # Yeh catch karega agar future mein ta library mein koi error aaye
+    except Exception as e:
+        print(f"Error analyzing stock: {e}") 
         return None
 
 # ================= SINGLE STOCK =================
 stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
 
 if stock:
-    data = yf.download(stock, period="3mo", interval="1d")
+    # Changed yf.download to yf.Ticker().history
+    data = yf.Ticker(stock).history(period="3mo", interval="1d")
 
     if not data.empty:
         result = analyze_stock(data)
@@ -194,7 +197,8 @@ stocks = [
 rows = []
 
 for s in stocks:
-    data = yf.download(s, period="3mo", interval="1d")
+    # Changed yf.download to yf.Ticker().history
+    data = yf.Ticker(s).history(period="3mo", interval="1d")
 
     if data.empty:
         continue
@@ -228,3 +232,4 @@ else:
     st.write("No trades found")
 
 st.write("⚠️ For learning purpose only")
+
