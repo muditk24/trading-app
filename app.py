@@ -10,38 +10,54 @@ st.title("📊 AI Option Trading Assistant")
 stock = st.text_input("Enter Stock (e.g. RELIANCE.NS)", "RELIANCE.NS")
 
 if stock:
-    data = yf.download(stock, period="3mo", interval="1d")
+    try:
+        data = yf.download(stock, period="3mo", interval="1d")
 
-    if not data.empty:
-        data.dropna(inplace=True)
+        if not data.empty:
+            data.dropna(inplace=True)
 
-        close_series = data['Close'].squeeze()
-        data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
+            close_series = data['Close'].squeeze()
 
-        latest = data.iloc[-1]
+            # RSI
+            data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
 
-        # Chart
-        fig = go.Figure(data=[go.Candlestick(
-            x=data.index,
-            open=data['Open'],
-            high=data['High'],
-            low=data['Low'],
-            close=data['Close']
-        )])
-        st.plotly_chart(fig)
+            latest = data.iloc[-1]
 
-        price = float(latest['Close'])
-        rsi = float(latest['rsi']) if pd.notna(latest['rsi']) else 50
+            # Chart
+            fig = go.Figure(data=[go.Candlestick(
+                x=data.index,
+                open=data['Open'],
+                high=data['High'],
+                low=data['Low'],
+                close=data['Close']
+            )])
+            st.plotly_chart(fig)
 
-        st.write(f"Price: {price}")
-        st.write(f"RSI: {round(rsi,2)}")
+            # SAFE VALUES
+            price = float(latest['Close'])
 
-        if rsi < 40:
-            st.success("✅ CALL (Buy Zone)")
-        elif rsi > 60:
-            st.error("❌ PUT (Sell Zone)")
+            # RSI safe
+            try:
+                rsi = float(latest['rsi'])
+            except:
+                rsi = 50
+
+            st.write(f"Price: {round(price,2)}")
+            st.write(f"RSI: {round(rsi,2)}")
+
+            # Signal
+            if rsi < 40:
+                st.success("✅ CALL (Buy Zone)")
+            elif rsi > 60:
+                st.error("❌ PUT (Sell Zone)")
+            else:
+                st.warning("⚠️ Sideways")
+
         else:
-            st.warning("⚠️ Sideways")
+            st.error("Stock data not found")
+
+    except:
+        st.error("Error loading stock data")
 
 # ================= LIVE SCANNER =================
 
@@ -57,13 +73,21 @@ results = []
 for s in stocks:
     try:
         data = yf.download(s, period="3mo", interval="1d")
+
+        if data.empty:
+            continue
+
         data.dropna(inplace=True)
 
         close_series = data['Close'].squeeze()
         data['rsi'] = ta.momentum.RSIIndicator(close_series).rsi()
 
         latest = data.iloc[-1]
-        rsi = float(latest['rsi'])
+
+        try:
+            rsi = float(latest['rsi'])
+        except:
+            continue
 
         if rsi < 45:
             results.append({"Stock": s, "Signal": "CALL", "RSI": round(rsi,2)})
@@ -88,10 +112,11 @@ last_day_results = []
 for s in stocks:
     try:
         data = yf.download(s, period="5d", interval="1d")
-        data.dropna(inplace=True)
 
         if len(data) < 2:
             continue
+
+        data.dropna(inplace=True)
 
         prev = data.iloc[-2]
         curr = data.iloc[-1]
