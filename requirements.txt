@@ -4,3 +4,5 @@ pandas
 ta
 plotly
 numpy
+nsepython
+requests
