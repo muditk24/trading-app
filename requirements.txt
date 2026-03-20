@@ -4,5 +4,5 @@ pandas
 ta
 plotly
 numpy
-nsepython
 requests
+nsetools-yogi
