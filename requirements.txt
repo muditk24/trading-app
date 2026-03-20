@@ -4,5 +4,3 @@ pandas
 ta
 plotly
 numpy
-requests
-nsetools-yogi
