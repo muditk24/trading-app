@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
+import time
 
 # ================= UI SETUP =================
 st.set_page_config(page_title="Alpha 9-Candle Scanner", layout="wide", page_icon="🎯")
@@ -22,6 +23,16 @@ STOCK_MAP = {
 INDICES = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
 
 # ================= HELPER FUNCTIONS =================
+# 🛡️ ANTI-RATE LIMIT FUNCTION 🛡️
+@st.cache_data(ttl=60, show_spinner=False) # Data ko 60 seconds ke liye cache karega
+def fetch_market_data(symbol, period="2d"):
+    try:
+        time.sleep(0.5) # Yahoo Finance ko lagatar hit karne se bachane ke liye gap
+        df = yf.Ticker(symbol).history(period=period, interval="5m")
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
 def get_indian_news(company_name):
     query = urllib.parse.quote(f'"{company_name}" share market news india when:1d')
     url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
@@ -125,7 +136,7 @@ t1, t2, t3, t4, t5 = st.tabs(["📊 Stock Analysis", "📈 Indices", "🎯 Recom
 # --- TAB 1: STOCK ---
 with t1:
     sel = st.selectbox("🔍 Analyze Specific Stock:", list(STOCK_MAP.keys()))
-    df = yf.Ticker(STOCK_MAP[sel]).history(period="3d", interval="5m")
+    df = fetch_market_data(STOCK_MAP[sel], period="3d")
     
     if not df.empty:
         res = analyze_9_candles(df, sel)
@@ -157,7 +168,7 @@ with t2:
     st.header("📈 Nifty & BankNifty Live")
     cols = st.columns(2)
     for i, (name, sym) in enumerate(INDICES.items()):
-        idx_df = yf.Ticker(sym).history(period="2d", interval="5m")
+        idx_df = fetch_market_data(sym, period="2d")
         if not idx_df.empty:
             res = analyze_9_candles(idx_df, name)
             if res:
@@ -182,10 +193,10 @@ with t3:
     st.write("Showing only 'Strong' Call and Put signals from the entire market...")
     if st.button("🔍 Find Setup"):
         recom_list = []
-        with st.spinner("Checking setups..."):
+        with st.spinner("Checking setups (Takes a few seconds to bypass limits)..."):
             all_assets = {**INDICES, **STOCK_MAP}
             for name, sym in all_assets.items():
-                temp_df = yf.Ticker(sym).history(period="2d", interval="5m")
+                temp_df = fetch_market_data(sym, period="2d")
                 if not temp_df.empty:
                     res = analyze_9_candles(temp_df, name)
                     if res and ("STRONG" in res['signal'] or "WEAK" in res['signal']):
@@ -210,9 +221,10 @@ with t4:
     if st.button("🚀 Start Market Scan"):
         results = []
         pb = st.progress(0)
-        for i, (n, s) in enumerate(STOCK_MAP.items()):
-            pb.progress((i+1)/len(STOCK_MAP))
-            scan_df = yf.Ticker(s).history(period="3d", interval="5m")
+        items = list(STOCK_MAP.items())
+        for i, (n, s) in enumerate(items):
+            pb.progress((i+1)/len(items))
+            scan_df = fetch_market_data(s, period="3d")
             if not scan_df.empty:
                 r = analyze_9_candles(scan_df, n)
                 if r:
