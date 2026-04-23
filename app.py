@@ -220,7 +220,11 @@ def analyze_set2_indices(df, symbol_name: str, now_ist: Optional[datetime] = Non
 
     if cross_up: base = {**checks_call, **checks_time, **checks_chop}
     elif cross_dn: base = {**checks_put, **checks_time, **checks_chop}
-    else: return {"ok": False, "side": "NONE", "label": "⏳ NO EMA9/21 cross", "price": round(c, 2), "rsi": round(rsi, 1), "checks": {}, "n_pass": 0, "n_total": 0, "grade": "SKIP"}
+    else: return {
+        "ok": False, "side": "NONE", "label": "⏳ NO EMA9/21 cross", 
+        "price": round(c, 2), "rsi": round(rsi, 1), "vwap": round(vwapv, 2), "ema9": round(e9, 2), "ema21": round(e21, 2),
+        "checks": {}, "n_pass": 0, "n_total": 0, "grade": "SKIP", "vol_ok": vol_ok
+    }
 
     total, passed = len(base), sum(1 for v in base.values() if v)
     is_call = bool(cross_up)
@@ -230,8 +234,8 @@ def analyze_set2_indices(df, symbol_name: str, now_ist: Optional[datetime] = Non
         "ok": bool(passed >= 9 and t_ok and t_now_ok and not skip_event_day),
         "side": "CALL" if is_call else "PUT",
         "label": f"{'🟢 CALL' if is_call else '🔴 PUT'} — {passed}/{total} rules OK",
-        "grade": gr, "price": round(c, 2), "rsi": round(rsi, 1), "checks": base,
-        "n_pass": passed, "n_total": total, "vol_spike": vol_spike
+        "grade": gr, "price": round(c, 2), "rsi": round(rsi, 1), "vwap": round(vwapv, 2), "ema9": round(e9, 2), "ema21": round(e21, 2),
+        "checks": base, "n_pass": passed, "n_total": total, "vol_spike": vol_spike, "vol_ok": vol_ok
     }
 
 def analyze_9_candles(df, symbol_name="Stock"):
@@ -298,10 +302,20 @@ with t2:
                 if s2:
                     s2line, s2k = format_set2_recommendation_badge(s2)
                     st.markdown(f"**{s2line}**")
-                    st.metric(f"Spot Price", f"₹{s2['price']}", f"RSI: {s2['rsi']}")
+                    
+                    # --- NEW UI: WAP, RSI, EMA, VOL PRINTOUT ---
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Spot", f"₹{s2['price']}")
+                    m2.metric("VWAP", f"₹{s2.get('vwap', '—')}")
+                    m3.metric("RSI", s2.get('rsi', '—'))
+                    m4.metric("EMA 9/21", f"{s2.get('ema9', '')} / {s2.get('ema21', '')}")
+                    
+                    vol_text = "🟢 Volume Spike" if s2.get('vol_spike') else "🟡 Volume > Avg" if s2.get('vol_ok') else "🔴 Low Volume"
+                    st.caption(f"**Check Status:** {vol_text}  |  **VWAP Cross:** {'🟢 Above' if s2['price'] > s2.get('vwap', 0) else '🔴 Below'}")
+                    st.write("---")
+                    # -------------------------------------------
                 
                 sp_ref = float(idx_df.iloc[-1]["Close"])
-                # FIX: 100 ladder step for both Nifty and Bank Nifty
                 otab = set2_call_put_tables_clean(sp_ref, name, ladder_step=100, n=4, s2=s2)
                 
                 st.markdown("### Call Options (CE)")
