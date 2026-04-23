@@ -93,22 +93,15 @@ def get_indian_news(company_name):
         return []
 
 def get_atm_strike(price, symbol_name):
-    if "NIFTY 50" in symbol_name: return round(price / 50) * 50
-    if "BANK NIFTY" in symbol_name: return round(price / 100) * 100
+    if "NIFTY" in symbol_name: return round(price / 100) * 100
     return round(price)
 
 def _round_strike(x: float, symbol_name: str) -> int:
-    if "NIFTY 50" in symbol_name and "BANK" not in symbol_name: return int(round(x / 50) * 50)
-    if "BANK NIFTY" in symbol_name: return int(round(x / 100) * 100)
+    if "NIFTY" in symbol_name: return int(round(x / 100) * 100)
     return int(round(x))
 
 def ladder_start_atm(spot: float, symbol_name: str, stp: int) -> int:
-    sp = float(spot)
-    if "BANK NIFTY" in symbol_name: return int(get_atm_strike(sp, symbol_name))
-    if "NIFTY 50" in symbol_name:
-        if stp >= 100: return int(round(sp / 100.0) * 100)
-        return int(get_atm_strike(sp, symbol_name))
-    return int(get_atm_strike(sp, symbol_name))
+    return int(get_atm_strike(spot, symbol_name))
 
 def set2_call_put_tables_clean(spot: float, symbol_name: str, ladder_step: int = 100, n: int = 4, s2=None):
     stp = int(ladder_step)
@@ -308,7 +301,8 @@ with t2:
                     st.metric(f"Spot Price", f"₹{s2['price']}", f"RSI: {s2['rsi']}")
                 
                 sp_ref = float(idx_df.iloc[-1]["Close"])
-                otab = set2_call_put_tables_clean(sp_ref, name, ladder_step=100 if "BANK" in name else 50, n=4, s2=s2)
+                # FIX: 100 ladder step for both Nifty and Bank Nifty
+                otab = set2_call_put_tables_clean(sp_ref, name, ladder_step=100, n=4, s2=s2)
                 
                 st.markdown("### Call Options (CE)")
                 st.dataframe(otab["calls"], use_container_width=True, hide_index=True)
