@@ -114,6 +114,55 @@ def step_for_symbol(symbol_name):
     return 100 if "BANK NIFTY" in symbol_name else 50 if "NIFTY" in symbol_name else 1
 
 
+def _round_strike(x: float, symbol_name: str) -> int:
+    if "NIFTY 50" in symbol_name and "BANK" not in symbol_name:
+        return int(round(x / 50) * 50)
+    if "BANK NIFTY" in symbol_name:
+        return int(round(x / 100) * 100)
+    return int(round(x))
+
+
+def set2_five_call_put_tables(spot: float, symbol_name: str, ladder_step: int = 100, n: int = 5):
+    """5 CALL (CE) + 5 PUT (PE) at ladder_step from ATM; default 100-100 pt (NIFTY strikes on 50 grid)."""
+    stp = int(ladder_step)
+    atm0 = get_atm_strike(spot, symbol_name)
+    ce_st = [_round_strike(atm0 + i * stp, symbol_name) for i in range(n)]
+    pe_st = [_round_strike(atm0 - i * stp, symbol_name) for i in range(n)]
+    hard_sl = "Hard SL: −30% of entry premium (no exception)"
+    soft_ex = "Exit: Supertrend flip | EMA9 re-cross | RSI>70(CE) / <30(PE) | 30m max | 2×5m no move"
+    tprot = "Profit: +30% (book 50%) | +50% (close full) | +80% only if ST+RSI still in favour"
+
+    def r_ce(i, strike):
+        return {
+            "S.No": i + 1,
+            f"CE Strike ({stp}pt ladder)": strike,
+            "Type": "CALL (CE)",
+            "vs ATM": "ATM" if i == 0 else f"ATM +{i}×{stp} (OTM CE)",
+            "Stop loss (SET2)": hard_sl,
+            "Other stop / exit": soft_ex,
+            "Targets (premium)": tprot,
+        }
+
+    def r_pe(i, strike):
+        return {
+            "S.No": i + 1,
+            f"PE Strike ({stp}pt ladder)": strike,
+            "Type": "PUT (PE)",
+            "vs ATM": "ATM" if i == 0 else f"ATM −{i}×{stp} (OTM PE)",
+            "Stop loss (SET2)": hard_sl,
+            "Other stop / exit": soft_ex,
+            "Targets (premium)": tprot,
+        }
+
+    return {
+        "atm": atm0,
+        "spot": round(float(spot), 2),
+        "calls": pd.DataFrame([r_ce(i, s) for i, s in enumerate(ce_st)]),
+        "puts": pd.DataFrame([r_pe(i, s) for i, s in enumerate(pe_st)]),
+        "step": stp,
+    }
+
+
 def ts_ist_to_time(ts):
     t = pd.Timestamp(ts)
     if t.tzinfo is not None:
@@ -459,10 +508,14 @@ with t2:
         idx_df = fetch_market_data(sym, period="5d")
         with cols[j]:
             st.subheader(name)
-            if idx_df is None or idx_df.empty or len(idx_df) < 30:
-                st.warning("Not enough 5m data. Try after market or refresh.")
+            if idx_df is None or idx_df.empty:
+                st.warning("No 5m data. Try after market or refresh.")
             else:
-                s2 = analyze_set2_indices(idx_df, name, skip_event_day=skip_event)
+                if len(idx_df) < 30:
+                    st.warning("Not enough 5m bars for full SET2 scan (need ≥30). Ladder table still from last close.")
+                s2 = None
+                if len(idx_df) >= 30:
+                    s2 = analyze_set2_indices(idx_df, name, skip_event_day=skip_event)
                 if s2 and "checks" in s2 and s2.get("n_total", 0) > 0:
                     st.metric("Spot (last closed 5m)", f"₹{s2['price']}", f"RSI {s2['rsi']}")
                     if s2.get("ok") and s2.get("n_pass", 0) >= 7:
@@ -489,8 +542,22 @@ with t2:
                         )
                 elif s2 and s2.get("n_total", 0) == 0 and "checks" in s2:
                     st.write(s2.get("label", "—"))
-                else:
-                    st.write("Setup analysis unavailable.")
+                sp_ref = float(idx_df.iloc[-1]["Close"])
+                lstep = 100
+                otab = set2_five_call_put_tables(sp_ref, name, ladder_step=lstep, n=5)
+                st.divider()
+                st.subheader("5 CALL + 5 PUT — 100pt ladder (stop / target table)")
+                st.caption(
+                    f"Ref LTP/close ₹{otab['spot']}  |  ATM (rounded) {otab['atm']}  |  {lstep}-point spacing per row. "
+                    "NIFTY strikes on 50; ladder still +100/−100 per step as requested."
+                )
+                tc, tp = st.columns(2, gap="medium")
+                with tc:
+                    st.markdown("**5 CALL (CE)**")
+                    st.dataframe(otab["calls"], use_container_width=True, height=320)
+                with tp:
+                    st.markdown("**5 PUT (PE)**")
+                    st.dataframe(otab["puts"], use_container_width=True, height=320)
 
 # --- TAB 3 ---
 with t3:
