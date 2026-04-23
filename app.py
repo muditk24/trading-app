@@ -139,36 +139,74 @@ def ladder_start_atm(spot: float, symbol_name: str, stp: int) -> int:
     return int(get_atm_strike(sp, symbol_name))
 
 
-def set2_five_call_put_tables(spot: float, symbol_name: str, ladder_step: int = 100, n: int = 5):
-    """5 CALL (CE) + 5 PUT (PE) at ladder_step from anchor ATM. NIFTY+100: anchor = nearest 100 (NSE chain style)."""
+def _ladder_rec_qty_targets(is_call: bool, row_i: int, s2) -> Tuple[str, int, int, int, int, int]:
+    """
+    Per strike row: (recommendation, qty, SL%, T1%, T2%, T3%) — short tags, no long reason text.
+    SET2: SL -30% prem; T 30/50/80% prem. Qty 0/1 (rulebook: max 2 trades/day = user session).
+    """
+    sl, t1, t2, t3 = 30, 30, 50, 80
+    if s2 is None or s2.get("n_total", 0) == 0:
+        return "WAIT", 0, sl, t1, t2, t3
+    sd = s2.get("side", "NONE")
+    if sd not in ("CALL", "PUT"):
+        return "WAIT", 0, sl, t1, t2, t3
+    want = "CALL" if is_call else "PUT"
+    if sd != want:
+        return ("USE_PE" if is_call else "USE_CE"), 0, sl, t1, t2, t3
+    gr = s2.get("grade", "SKIP")
+    n_p, n_t = s2.get("n_pass", 0), s2.get("n_total", 1)
+    ok = bool(s2.get("ok"))
+    vq = bool(s2.get("vol_spike"))
+    if row_i == 0:
+        if ok and n_p >= n_t and gr in ("STRONG", "VERY_STRONG"):
+            return "TRADE", 1, sl, t1, t2, t3
+        if gr == "MODERATE" and n_p >= 7 and ok:
+            return "TRADE_S", 1, sl, t1, t2, t3
+        if n_p < 7 or not ok:
+            return "WAIT", 0, sl, t1, t2, t3
+        if gr in ("STRONG", "VERY_STRONG", "MODERATE"):
+            return "TRADE", 1, sl, t1, t2, t3
+        return "WAIT", 0, sl, t1, t2, t3
+    if row_i == 1:
+        if gr == "VERY_STRONG" and vq and ok:
+            return "TRADE_1OTM", 1, sl, t1, t2, t3
+        return "SKIP_1OTM", 0, sl, t1, t2, t3
+    return "SKIP_DEEP", 0, sl, t1, t2, t3
+
+
+def set2_five_call_put_tables(
+    spot: float, symbol_name: str, ladder_step: int = 100, n: int = 5, s2=None
+):
+    """5 CE + 5 PE: Recommendation + Qty + SL/Tgt % (numbers). Optional s2 for side/grade match."""
     stp = int(ladder_step)
     atm0 = ladder_start_atm(spot, symbol_name, stp)
     ce_st = [_round_strike(atm0 + i * stp, symbol_name) for i in range(n)]
     pe_st = [_round_strike(atm0 - i * stp, symbol_name) for i in range(n)]
-    hard_sl = "Hard SL: −30% of entry premium (no exception)"
-    soft_ex = "Exit: Supertrend flip | EMA9 re-cross | RSI>70(CE) / <30(PE) | 30m max | 2×5m no move"
-    tprot = "Profit: +30% (book 50%) | +50% (close full) | +80% only if ST+RSI still in favour"
 
     def r_ce(i, strike):
+        rec, qty, sl_p, t1, t2, t3 = _ladder_rec_qty_targets(True, i, s2)
         return {
             "S.No": i + 1,
-            f"CE Strike ({stp}pt ladder)": strike,
-            "Type": "CALL (CE)",
-            "vs ATM": "ATM" if i == 0 else f"ATM +{i}×{stp} (OTM CE)",
-            "Stop loss (SET2)": hard_sl,
-            "Other stop / exit": soft_ex,
-            "Targets (premium)": tprot,
+            "Strike (CE)": strike,
+            "Recommendation": rec,
+            "Qty": qty,
+            "SL %": sl_p,
+            "Tgt1 %": t1,
+            "Tgt2 %": t2,
+            "Tgt3 %": t3,
         }
 
     def r_pe(i, strike):
+        rec, qty, sl_p, t1, t2, t3 = _ladder_rec_qty_targets(False, i, s2)
         return {
             "S.No": i + 1,
-            f"PE Strike ({stp}pt ladder)": strike,
-            "Type": "PUT (PE)",
-            "vs ATM": "ATM" if i == 0 else f"ATM −{i}×{stp} (OTM PE)",
-            "Stop loss (SET2)": hard_sl,
-            "Other stop / exit": soft_ex,
-            "Targets (premium)": tprot,
+            "Strike (PE)": strike,
+            "Recommendation": rec,
+            "Qty": qty,
+            "SL %": sl_p,
+            "Tgt1 %": t1,
+            "Tgt2 %": t2,
+            "Tgt3 %": t3,
         }
 
     return {
@@ -626,13 +664,14 @@ with t2:
                     st.write(s2.get("label", "—"))
                 sp_ref = float(idx_df.iloc[-1]["Close"])
                 lstep = 100
-                otab = set2_five_call_put_tables(sp_ref, name, ladder_step=lstep, n=5)
+                otab = set2_five_call_put_tables(
+                    sp_ref, name, ladder_step=lstep, n=5, s2=s2 if len(idx_df) >= 30 else None
+                )
                 st.divider()
-                st.subheader("5 CALL + 5 PUT — 100pt ladder (stop / target table)")
+                st.subheader("5 CALL + 5 PUT — recommendation · qty · SL/Tgt (%) per strike")
                 st.caption(
-                    f"Ref LTP/close ₹{otab['spot']}  |  Ladder anchor {otab['atm']}  |  {lstep}pt per row. "
-                    "**NIFTY:** 100pt list uses **nearest 100 to spot** (NSE chain style, e.g. 24200 not 24150). "
-                    "**Bank Nifty:** 100pt grid. All strikes stay on **50** (NIFTY) / **100** (BN) exchange step."
+                    f"LTP ₹{otab['spot']}  |  anchor {otab['atm']}  |  {lstep}pt. "
+                    "**SL / Tgt%** = on **premium** (not spot). **Qty** 0/1. **Recommendation** = SET2 + SET2 ladder rules (short code)."
                 )
                 tc, tp = st.columns(2, gap="medium")
                 with tc:
