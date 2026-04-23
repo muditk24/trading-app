@@ -10,7 +10,7 @@ import time
 import numpy as np
 from zoneinfo import ZoneInfo
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -122,10 +122,27 @@ def _round_strike(x: float, symbol_name: str) -> int:
     return int(round(x))
 
 
+def ladder_start_atm(spot: float, symbol_name: str, stp: int) -> int:
+    """
+    ATM anchor for 5+5 ladder.
+    NIFTY: index options are 50-wide, but NSE/chain UI often centres on **nearest 100** to spot
+    when you show 100-pt step ladders (24200, 24300, …) — we match that.
+    BANKNIFTY: exchange step 100 — same as get_atm_strike.
+    """
+    sp = float(spot)
+    if "BANK NIFTY" in symbol_name:
+        return int(get_atm_strike(sp, symbol_name))
+    if "NIFTY 50" in symbol_name:
+        if stp >= 100:
+            return int(round(sp / 100.0) * 100)
+        return int(get_atm_strike(sp, symbol_name))
+    return int(get_atm_strike(sp, symbol_name))
+
+
 def set2_five_call_put_tables(spot: float, symbol_name: str, ladder_step: int = 100, n: int = 5):
-    """5 CALL (CE) + 5 PUT (PE) at ladder_step from ATM; default 100-100 pt (NIFTY strikes on 50 grid)."""
+    """5 CALL (CE) + 5 PUT (PE) at ladder_step from anchor ATM. NIFTY+100: anchor = nearest 100 (NSE chain style)."""
     stp = int(ladder_step)
-    atm0 = get_atm_strike(spot, symbol_name)
+    atm0 = ladder_start_atm(spot, symbol_name, stp)
     ce_st = [_round_strike(atm0 + i * stp, symbol_name) for i in range(n)]
     pe_st = [_round_strike(atm0 - i * stp, symbol_name) for i in range(n)]
     hard_sl = "Hard SL: −30% of entry premium (no exception)"
@@ -161,6 +178,38 @@ def set2_five_call_put_tables(spot: float, symbol_name: str, ladder_step: int = 
         "puts": pd.DataFrame([r_pe(i, s) for i, s in enumerate(pe_st)]),
         "step": stp,
     }
+
+
+def format_set2_recommendation_badge(s2) -> Tuple[str, str]:
+    """
+    Return (line, ui_kind) where ui_kind in success, warning, error, info
+    for STRONG/WEAK CALL/PUT / NO TRADE style wording.
+    """
+    if s2 is None or "n_total" not in s2:
+        return "⚪ SET2: — (no data)", "info"
+    if s2.get("n_total", 0) == 0:
+        return "⚪ SET2: NO CROSS / WAIT (need EMA9-21 cross on last closed 5m)", "warning"
+    side = s2.get("side", "NONE")
+    gr = s2.get("grade", "SKIP")
+    n_p, n_t = s2.get("n_pass", 0), s2.get("n_total", 1)
+    ok = bool(s2.get("ok"))
+    if side == "CALL":
+        if gr in ("STRONG", "VERY_STRONG") and ok and n_p >= n_t:
+            return f"🟢 SET2: STRONG CALL ({n_p}/{n_t} rules)", "success"
+        if gr in ("STRONG", "VERY_STRONG") and not ok:
+            return f"🟡 SET2: WEAK CALL — setup strong but time/window/check failed ({n_p}/{n_t})", "warning"
+        if gr == "MODERATE" or (7 <= n_p < n_t):
+            return f"🟡 SET2: WEAK CALL (Wait for setup) — {n_p}/{n_t} rules", "warning"
+        return f"⏳ SET2: NO TRADE / WAIT (CALL) — {n_p}/{n_t} rules", "info"
+    if side == "PUT":
+        if gr in ("STRONG", "VERY_STRONG") and ok and n_p >= n_t:
+            return f"🔴 SET2: STRONG PUT ({n_p}/{n_t} rules)", "error"
+        if gr in ("STRONG", "VERY_STRONG") and not ok:
+            return f"🟡 SET2: WEAK PUT — time/window failed ({n_p}/{n_t})", "warning"
+        if gr == "MODERATE" or (7 <= n_p < n_t):
+            return f"🟡 SET2: WEAK PUT (Wait for setup) — {n_p}/{n_t} rules", "warning"
+        return f"⏳ SET2: NO TRADE / WAIT (PUT) — {n_p}/{n_t} rules", "info"
+    return "⚪ SET2: NO TRADE / SIDEWAYS", "info"
 
 
 def ts_ist_to_time(ts):
@@ -511,19 +560,52 @@ with t2:
             if idx_df is None or idx_df.empty:
                 st.warning("No 5m data. Try after market or refresh.")
             else:
+                st.caption("**9-candle** = same STRONG/WEAK CALL/PUT as stock tab | **SET2** = EMA+ST+RSI+VWAP+vol+time")
+                res9 = analyze_9_candles(idx_df, name) if len(idx_df) >= 15 else None
+                if res9:
+                    a1, a2, a3, a4 = st.columns(4)
+                    a1.metric("LTP (9c)", f"₹{res9['price']}")
+                    a2.metric("9-candle score", f"{res9['score']}/4")
+                    with a3:
+                        s9 = res9["signal"]
+                        if "STRONG" in s9 and "CALL" in s9:
+                            st.success(s9)
+                        elif "WEAK" in s9 and "CALL" in s9:
+                            st.warning(s9)
+                        elif "STRONG" in s9 and "PUT" in s9:
+                            st.error(s9)
+                        elif "WEAK" in s9 and "PUT" in s9:
+                            st.warning(s9)
+                        else:
+                            st.info(s9)
+                    a4.metric("RSI", res9["rsi"])
+                    st.caption(
+                        f"9-candle ref: **{res9['strike']}** | Tgt ~₹{res9['target']} | SL ~₹{res9['sl']} (spot, not option premium)"
+                    )
+                    with st.expander("9-candle — why (Nifty / BN)"):
+                        for _r in res9["reasons"]:
+                            st.write(_r)
+                else:
+                    st.caption("9-candle: **15+** 5m bars chahiye STRONG/WEAK dikhane ke liye.")
+                st.markdown("**SET2 recommendation (rulebook style)**")
                 if len(idx_df) < 30:
                     st.warning("Not enough 5m bars for full SET2 scan (need ≥30). Ladder table still from last close.")
                 s2 = None
                 if len(idx_df) >= 30:
                     s2 = analyze_set2_indices(idx_df, name, skip_event_day=skip_event)
-                if s2 and "checks" in s2 and s2.get("n_total", 0) > 0:
-                    st.metric("Spot (last closed 5m)", f"₹{s2['price']}", f"RSI {s2['rsi']}")
-                    if s2.get("ok") and s2.get("n_pass", 0) >= 7:
-                        st.success(s2["label"])
-                    elif "MODERATE" in s2.get("label", ""):
-                        st.warning(s2["label"])
+                if s2 is not None:
+                    s2line, s2k = format_set2_recommendation_badge(s2)
+                    if s2k == "success":
+                        st.success(s2line)
+                    elif s2k == "warning":
+                        st.warning(s2line)
+                    elif s2k == "error":
+                        st.error(s2line)
                     else:
-                        st.info(s2["label"])
+                        st.info(s2line)
+                if s2 and "checks" in s2 and s2.get("n_total", 0) > 0:
+                    st.metric("Spot (SET2 bar)", f"₹{s2['price']}", f"RSI {s2['rsi']}")
+                    st.caption(s2.get("label", "—"))
                     st.write(f"**Bar time (IST):** {s2.get('bar_time_ist', '—')}")
                     st.write(f"**Checks passed:** {s2['n_pass']}/{s2['n_total']}  |  **Grade:** {s2.get('grade', '—')}")
                     st.write(f"**Strike hint:** {s2.get('strike_hint', '—')}")
@@ -548,8 +630,9 @@ with t2:
                 st.divider()
                 st.subheader("5 CALL + 5 PUT — 100pt ladder (stop / target table)")
                 st.caption(
-                    f"Ref LTP/close ₹{otab['spot']}  |  ATM (rounded) {otab['atm']}  |  {lstep}-point spacing per row. "
-                    "NIFTY strikes on 50; ladder still +100/−100 per step as requested."
+                    f"Ref LTP/close ₹{otab['spot']}  |  Ladder anchor {otab['atm']}  |  {lstep}pt per row. "
+                    "**NIFTY:** 100pt list uses **nearest 100 to spot** (NSE chain style, e.g. 24200 not 24150). "
+                    "**Bank Nifty:** 100pt grid. All strikes stay on **50** (NIFTY) / **100** (BN) exchange step."
                 )
                 tc, tp = st.columns(2, gap="medium")
                 with tc:
