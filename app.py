@@ -16,7 +16,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 # ================= UI SETUP =================
 st.set_page_config(page_title="Alpha 9-Candle Scanner", layout="wide", page_icon="🎯")
-st.title("🎯 Pro Trader Dashboard (9-Candle + SET2 Indices)")
+st.title("🎯 Pro Trader Dashboard (9-Candle + ORB Indices)")
 
 # ================= MASTER LIST =================
 STOCK_MAP = {
@@ -29,7 +29,7 @@ STOCK_MAP = {
 INDICES = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
 
 
-# ================= SET 2: SuperTrend(10,3) =================
+# ================= TREND: SuperTrend(10,3) =================
 def supertrend_bull_bear(df, period=10, mult=3.0):
     d = df.copy()
     h, l, c = d["High"], d["Low"], d["Close"]
@@ -103,141 +103,112 @@ def _round_strike(x: float, symbol_name: str) -> int:
 def ladder_start_atm(spot: float, symbol_name: str, stp: int) -> int:
     return int(get_atm_strike(spot, symbol_name))
 
-def set2_call_put_tables_clean(spot: float, symbol_name: str, ladder_step: int = 100, n: int = 4, s2=None):
+# ================= NEW INDICES STRATEGY (ORB + VWAP + VOL + TREND) =================
+def analyze_orb_vwap_trend(df, symbol_name: str):
+    if df is None or len(df) < 15: return None
+    df = df.copy()
+    
+    df["Date"] = pd.to_datetime(df.index).date
+    
+    # 1. VWAP Calculation
+    df["TP"] = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    df["VP"] = df["TP"] * df["Volume"]
+    df["VWAP"] = df.groupby("Date")["VP"].transform("cumsum") / df.groupby("Date")["Volume"].transform("cumsum")
+    
+    # 2. Volume MA (for Volume filter)
+    df["VOL_MA20"] = df["Volume"].rolling(20, min_periods=5).mean()
+    
+    # 3. Trend (Supertrend 10,3)
+    df["ST_DIR"] = supertrend_bull_bear(df, 10, 3.0)
+    
+    # 4. ORB (First 15-min Opening Range Breakout = First 3 bars of 5m timeframe)
+    first_3_bars = df.groupby("Date").head(3)
+    orb_highs = first_3_bars.groupby("Date")["High"].max()
+    orb_lows = first_3_bars.groupby("Date")["Low"].min()
+    df["ORB_High"] = df["Date"].map(orb_highs)
+    df["ORB_Low"] = df["Date"].map(orb_lows)
+
+    # Fetch latest data point
+    curr = df.iloc[-1]
+    c = float(curr["Close"])
+    vwap = float(curr["VWAP"])
+    v = float(curr["Volume"])
+    vma = float(curr["VOL_MA20"]) if not pd.isna(curr["VOL_MA20"]) else 0.0
+    st_dir = int(curr["ST_DIR"])
+    orb_h = float(curr["ORB_High"])
+    orb_l = float(curr["ORB_Low"])
+
+    # Boolean Checks
+    orb_up = c > orb_h
+    orb_dn = c < orb_l
+    vwap_up = c > vwap
+    vwap_dn = c < vwap
+    vol_ok = v > vma and vma > 0
+    trend_up = st_dir == 1
+    trend_dn = st_dir == -1
+
+    # Signal Logic
+    strong_call = orb_up and vwap_up and vol_ok and trend_up
+    strong_put = orb_dn and vwap_dn and vol_ok and trend_dn
+    
+    side = "NONE"
+    grade = "WAIT"
+    
+    if strong_call:
+        side = "CALL"
+        grade = "STRONG"
+    elif strong_put:
+        side = "PUT"
+        grade = "STRONG"
+    elif orb_up:
+        side = "CALL"
+        grade = "WEAK" # Only ORB broken, lacking volume/vwap/trend support
+    elif orb_dn:
+        side = "PUT"
+        grade = "WEAK"
+
+    return {
+        "price": round(c, 2),
+        "vwap": round(vwap, 2),
+        "orb_high": round(orb_h, 2),
+        "orb_low": round(orb_l, 2),
+        "trend_dir": "🟢 Bullish" if trend_up else "🔴 Bearish" if trend_dn else "⚪ Neutral",
+        "vol_ok": vol_ok,
+        "orb_up": orb_up,
+        "orb_dn": orb_dn,
+        "vwap_up": vwap_up,
+        "vwap_dn": vwap_dn,
+        "side": side,
+        "grade": grade,
+        "is_strong_call": strong_call,
+        "is_strong_put": strong_put
+    }
+
+def indices_options_tables(spot: float, symbol_name: str, ladder_step: int = 100, n: int = 4, data=None):
     stp = int(ladder_step)
     atm0 = ladder_start_atm(spot, symbol_name, stp)
     ce_st = [_round_strike(atm0 + i * stp, symbol_name) for i in range(n)]
     pe_st = [_round_strike(atm0 - i * stp, symbol_name) for i in range(n)]
 
     def get_rec_text(is_call, i):
-        if s2 is None or s2.get("n_total", 0) == 0: return "⚪ Wait"
+        if not data or data.get("side") == "NONE": return "⚪ Wait"
         want = "CALL" if is_call else "PUT"
-        if s2.get("side") != want: return "⚪ Avoid"
         
-        gr = s2.get("grade", "SKIP")
-        ok = bool(s2.get("ok"))
-        n_p = s2.get("n_pass", 0)
+        if data.get("side") != want: return "⚪ Avoid"
         
-        if i == 0:  # ATM
-            if gr in ("STRONG", "VERY_STRONG") and ok: return f"🟢 Strong {want}"
-            if gr == "MODERATE" or (n_p >= 7): return f"🟡 Weak {want}"
-            return "⚪ Wait"
-        elif i == 1:  # 1 OTM
-            if gr == "VERY_STRONG" and ok and s2.get("vol_spike"): return f"🟢 Buy (1-OTM {want})"
-            return "⚪ Avoid"
-        return "⚪ Avoid"
-
-    def r_ce(i, strike):
-        return {"Strike (CE)": strike, "Recommendation": get_rec_text(True, i), "Stop Loss": "-30% Prem"}
-
-    def r_pe(i, strike):
-        return {"Strike (PE)": strike, "Recommendation": get_rec_text(False, i), "Stop Loss": "-30% Prem"}
+        if data.get("grade") == "STRONG":
+            return f"🟢 Strong Buy (Focus ATM)" if i == 0 else f"🟡 Buy {want}"
+        if data.get("grade") == "WEAK":
+            return f"🟡 Risky/Weak {want}"
+            
+        return "⚪ Wait"
 
     return {
-        "calls": pd.DataFrame([r_ce(i, s) for i, s in enumerate(ce_st)]),
-        "puts": pd.DataFrame([r_pe(i, s) for i, s in enumerate(pe_st)])
+        "calls": pd.DataFrame([{"Strike (CE)": s, "Recommendation": get_rec_text(True, i), "Stop Loss": "-30% Prem"} for i, s in enumerate(ce_st)]),
+        "puts": pd.DataFrame([{"Strike (PE)": s, "Recommendation": get_rec_text(False, i), "Stop Loss": "-30% Prem"} for i, s in enumerate(pe_st)])
     }
 
-def format_set2_recommendation_badge(s2) -> Tuple[str, str]:
-    if s2 is None or "n_total" not in s2: return "⚪ SET2: — (no data)", "info"
-    if s2.get("n_total", 0) == 0: return "⚪ NO CROSS / WAIT", "warning"
-    side = s2.get("side", "NONE")
-    gr = s2.get("grade", "SKIP")
-    n_p, n_t = s2.get("n_pass", 0), s2.get("n_total", 1)
-    ok = bool(s2.get("ok"))
-    if side == "CALL":
-        if gr in ("STRONG", "VERY_STRONG") and ok and n_p >= n_t: return f"🟢 STRONG CALL ({n_p}/{n_t} rules)", "success"
-        if gr in ("STRONG", "VERY_STRONG") and not ok: return f"🟡 WEAK CALL ({n_p}/{n_t})", "warning"
-        if gr == "MODERATE" or (7 <= n_p < n_t): return f"🟡 WEAK CALL ({n_p}/{n_t} rules)", "warning"
-        return f"⏳ NO TRADE / WAIT ({n_p}/{n_t} rules)", "info"
-    if side == "PUT":
-        if gr in ("STRONG", "VERY_STRONG") and ok and n_p >= n_t: return f"🔴 STRONG PUT ({n_p}/{n_t} rules)", "error"
-        if gr in ("STRONG", "VERY_STRONG") and not ok: return f"🟡 WEAK PUT ({n_p}/{n_t})", "warning"
-        if gr == "MODERATE" or (7 <= n_p < n_t): return f"🟡 WEAK PUT ({n_p}/{n_t} rules)", "warning"
-        return f"⏳ NO TRADE / WAIT ({n_p}/{n_t} rules)", "info"
-    return "⚪ NO TRADE / SIDEWAYS", "info"
-
-def ts_ist_to_time(ts):
-    t = pd.Timestamp(ts)
-    if t.tzinfo is not None: return t.tz_convert(IST).time(), t.tz_convert(IST).weekday()
-    t2 = t.tz_localize(IST)
-    return t2.time(), t2.weekday()
-
-def set2_time_window_ok(bar_ts):
-    t, wd = ts_ist_to_time(bar_ts)
-    if wd >= 5: return False, "weekend"
-    tmin = t.hour * 60 + t.minute
-    o45, m1, a130, a315 = 9 * 60 + 45, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 15
-    if o45 <= tmin <= m1: return True, "morning 9:45–11:30"
-    if a130 <= tmin <= a315: return True, "afternoon 1:30–3:15"
-    return False, "outside window"
-
-def set2_now_allows_entry(now_ist: datetime, skip_event: bool):
-    if skip_event: return False, "event day"
-    t, wd = now_ist.time(), now_ist.weekday()
-    if wd >= 5: return False, "weekend"
-    tmin = t.hour * 60 + t.minute
-    o45, m1, a130, a315 = 9 * 60 + 45, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 15
-    if o45 <= tmin <= m1 or a130 <= tmin <= a315: return True, "OK"
-    return False, "outside window"
-
-def analyze_set2_indices(df, symbol_name: str, now_ist: Optional[datetime] = None, skip_event_day: bool = False):
-    if df is None or len(df) < 30: return None
-    now_ist = now_ist or datetime.now(IST)
-    df = df.copy()
-    df["EMA9"] = ta.trend.EMAIndicator(df["Close"], window=9).ema_indicator()
-    df["EMA21"] = ta.trend.EMAIndicator(df["Close"], window=21).ema_indicator()
-    df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
-    df["Date"] = pd.to_datetime(df.index).date
-    d2 = df.copy()
-    d2["TP2"] = (df["High"] + df["Low"] + df["Close"]) / 3.0
-    d2["VP2"] = d2["TP2"] * d2["Volume"]
-    d2["VWAP"] = d2.groupby("Date")["VP2"].transform("cumsum") / d2.groupby("Date")["Volume"].transform("cumsum")
-    df["VWAP"] = d2["VWAP"]
-    df["VOL_MA20"] = df["Volume"].rolling(20, min_periods=5).mean()
-    df["ST_DIR"] = supertrend_bull_bear(df, 10, 3.0)
-
-    p, p_prev = len(df) - 2, len(df) - 3
-    if p_prev < 0: return None
-    row, prev = df.iloc[p], df.iloc[p_prev]
-    c, rsi, e9, e21 = float(row["Close"]), float(row["RSI"]) if not pd.isna(row["RSI"]) else 50.0, float(row["EMA9"]), float(row["EMA21"])
-    e9p, e21p, st_dir = float(prev["EMA9"]), float(prev["EMA21"]), int(row["ST_DIR"])
-    vwapv, v, vma = float(row["VWAP"]), float(row["Volume"]), float(row["VOL_MA20"]) if not pd.isna(row["VOL_MA20"]) else 0.0
-    bar_ts = df.index[p]
-
-    vol_spike = vma > 0 and v > vma * 1.4
-    vol_ok = vma > 0 and v > vma
-    chop = abs(e9 - e21) / c < 0.0003 if c > 0 else False
-    cross_up, cross_dn = (e9 > e21) and (e9p <= e21p), (e9 < e21) and (e9p >= e21p)
-    
-    checks_call = {"EMA9 cross above EMA21": bool(cross_up), "Supertrend GREEN": st_dir == 1, "RSI 45–65": 45.0 <= rsi <= 65.0, "Close above VWAP": c > vwapv, "Volume > 20-bar avg": vol_ok}
-    checks_put = {"EMA9 cross below EMA21": bool(cross_dn), "Supertrend RED": st_dir == -1, "RSI 35–55": 35.0 <= rsi <= 55.0, "Close below VWAP": c < vwapv, "Volume > 20-bar avg": vol_ok}
-    
-    t_ok, _ = set2_time_window_ok(bar_ts)
-    t_now_ok, _ = set2_now_allows_entry(now_ist, skip_event_day)
-    checks_time = {"Time window OK": t_ok, "Now in window": t_now_ok}
-    checks_chop = {"No EMAs chop": (not chop) or bool(cross_up) or bool(cross_dn)}
-
-    if cross_up: base = {**checks_call, **checks_time, **checks_chop}
-    elif cross_dn: base = {**checks_put, **checks_time, **checks_chop}
-    else: return {
-        "ok": False, "side": "NONE", "label": "⏳ NO EMA9/21 cross", 
-        "price": round(c, 2), "rsi": round(rsi, 1), "vwap": round(vwapv, 2), "ema9": round(e9, 2), "ema21": round(e21, 2),
-        "checks": {}, "n_pass": 0, "n_total": 0, "grade": "SKIP", "vol_ok": vol_ok
-    }
-
-    total, passed = len(base), sum(1 for v in base.values() if v)
-    is_call = bool(cross_up)
-    gr = "VERY_STRONG" if (passed == total and vol_spike) or (7 <= passed < total and vol_spike and passed >= 8) else "STRONG" if passed == total else "MODERATE" if 7 <= passed < total else "SKIP"
-
-    return {
-        "ok": bool(passed >= 9 and t_ok and t_now_ok and not skip_event_day),
-        "side": "CALL" if is_call else "PUT",
-        "label": f"{'🟢 CALL' if is_call else '🔴 PUT'} — {passed}/{total} rules OK",
-        "grade": gr, "price": round(c, 2), "rsi": round(rsi, 1), "vwap": round(vwapv, 2), "ema9": round(e9, 2), "ema21": round(e21, 2),
-        "checks": base, "n_pass": passed, "n_total": total, "vol_spike": vol_spike, "vol_ok": vol_ok
-    }
-
+# Original 9 Candles function unchanged
 def analyze_9_candles(df, symbol_name="Stock"):
     try:
         if len(df) < 15: return None
@@ -271,7 +242,7 @@ def analyze_9_candles(df, symbol_name="Stock"):
 
 
 # ================= TABS =================
-t1, t2, t3, t4, t5 = st.tabs(["📊 Stock Analysis", "📈 Indices (Clean)", "🎯 Recommendations", "🔥 Scanner", "📰 News"])
+t1, t2, t3, t4, t5 = st.tabs(["📊 Stock Analysis", "📈 Indices (ORB+VWAP)", "🎯 Recommendations", "🔥 Scanner", "📰 News"])
 
 with t1:
     sel = st.selectbox("🔍 Analyze Specific Stock:", list(STOCK_MAP.keys()))
@@ -289,8 +260,7 @@ with t1:
             st.plotly_chart(fig, use_container_width=True)
 
 with t2:
-    st.header("📈 Nifty & BankNifty Live SET2")
-    skip_event = st.checkbox("Skip News/Event Day", value=False)
+    st.header("📈 Nifty & BankNifty Live (ORB + Vol + VWAP + Trend)")
     cols = st.columns(2)
     
     for j, (name, sym) in enumerate(INDICES.items()):
@@ -298,30 +268,39 @@ with t2:
         with cols[j]:
             st.subheader(name)
             if not idx_df.empty:
-                s2 = analyze_set2_indices(idx_df, name, skip_event_day=skip_event) if len(idx_df) >= 30 else None
-                if s2:
-                    s2line, s2k = format_set2_recommendation_badge(s2)
-                    st.markdown(f"**{s2line}**")
+                s_data = analyze_orb_vwap_trend(idx_df, name)
+                if s_data:
+                    # Headline Signal
+                    if s_data["is_strong_call"]:
+                        st.markdown("**🟢 STRONG CALL (All 4 Filters Passed)**")
+                    elif s_data["is_strong_put"]:
+                        st.markdown("**🔴 STRONG PUT (All 4 Filters Passed)**")
+                    else:
+                        st.markdown("**⏳ WAITING FOR PROPER BREAKOUT...**")
                     
-                    # --- NEW UI: WAP, RSI, EMA, VOL PRINTOUT ---
+                    # 4 Metrics Printout
                     m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Spot", f"₹{s2['price']}")
-                    m2.metric("VWAP", f"₹{s2.get('vwap', '—')}")
-                    m3.metric("RSI", s2.get('rsi', '—'))
-                    m4.metric("EMA 9/21", f"{s2.get('ema9', '')} / {s2.get('ema21', '')}")
+                    m1.metric("Spot LTP", f"₹{s_data['price']}")
+                    m2.metric("VWAP", f"₹{s_data['vwap']}")
+                    m3.metric("Trend (ST)", s_data["trend_dir"])
+                    m4.metric("ORB Range", f"{s_data['orb_high']} - {s_data['orb_low']}")
                     
-                    vol_text = "🟢 Volume Spike" if s2.get('vol_spike') else "🟡 Volume > Avg" if s2.get('vol_ok') else "🔴 Low Volume"
-                    st.caption(f"**Check Status:** {vol_text}  |  **VWAP Cross:** {'🟢 Above' if s2['price'] > s2.get('vwap', 0) else '🔴 Below'}")
+                    # Filter Checks
+                    st.caption(
+                        f"**Filters Check:** "
+                        f"ORB Brk: {'🟢 Up' if s_data['orb_up'] else '🔴 Dn' if s_data['orb_dn'] else '⚪ Inside'} | "
+                        f"Vol > Avg: {'🟢 Yes' if s_data['vol_ok'] else '🔴 No'} | "
+                        f"VWAP: {'🟢 Above' if s_data['vwap_up'] else '🔴 Below'}"
+                    )
                     st.write("---")
-                    # -------------------------------------------
-                
-                sp_ref = float(idx_df.iloc[-1]["Close"])
-                otab = set2_call_put_tables_clean(sp_ref, name, ladder_step=100, n=4, s2=s2)
-                
-                st.markdown("### Call Options (CE)")
-                st.dataframe(otab["calls"], use_container_width=True, hide_index=True)
-                st.markdown("### Put Options (PE)")
-                st.dataframe(otab["puts"], use_container_width=True, hide_index=True)
+                    
+                    # Options Table
+                    otab = indices_options_tables(s_data['price'], name, ladder_step=100, n=4, data=s_data)
+                    
+                    st.markdown("### Call Options (CE)")
+                    st.dataframe(otab["calls"], use_container_width=True, hide_index=True)
+                    st.markdown("### Put Options (PE)")
+                    st.dataframe(otab["puts"], use_container_width=True, hide_index=True)
 
 with t3:
     st.header("🎯 Active Buy Recommendations")
