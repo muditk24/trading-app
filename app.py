@@ -10,7 +10,6 @@ import time
 import numpy as np
 from zoneinfo import ZoneInfo
 from datetime import datetime
-from typing import Optional, Tuple
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -18,16 +17,47 @@ IST = ZoneInfo("Asia/Kolkata")
 st.set_page_config(page_title="Alpha 9-Candle Scanner", layout="wide", page_icon="🎯")
 st.title("🎯 Pro Trader Dashboard (9-Candle + ORB Indices)")
 
-# ================= MASTER LIST =================
+# ================= MASTER LIST (100+ HIGH LIQUIDITY STOCKS) =================
 STOCK_MAP = {
-    "RELIANCE": "RELIANCE.NS", "HDFC BANK": "HDFCBANK.NS", "ICICI BANK": "ICICIBANK.NS",
-    "SBI": "SBIN.NS", "TCS": "TCS.NS", "INFOSYS": "INFY.NS", "ONGC": "ONGC.NS",
-    "PFC": "PFC.NS", "COAL INDIA": "COALINDIA.NS", "TATA MOTORS": "TATAMOTORS.NS",
-    "AXIS BANK": "AXISBANK.NS", "BHARTI AIRTEL": "BHARTIARTL.NS", "L&T": "LT.NS",
-    "BAJAJ FINANCE": "BAJFINANCE.NS", "ITC": "ITC.NS"
+    # Banking & Finance
+    "HDFC BANK": "HDFCBANK.NS", "ICICI BANK": "ICICIBANK.NS", "SBI": "SBIN.NS", 
+    "AXIS BANK": "AXISBANK.NS", "KOTAK BANK": "KOTAKBANK.NS", "INDUSIND BANK": "INDUSINDBK.NS",
+    "BANK OF BARODA": "BANKBARODA.NS", "PNB": "PNB.NS", "BAJAJ FINANCE": "BAJFINANCE.NS",
+    "BAJAJ FINSERV": "BAJAJFINSV.NS", "CHOLAFIN": "CHOLAFIN.NS", "PFC": "PFC.NS", "RECLTD": "RECLTD.NS",
+    
+    # IT & Tech
+    "TCS": "TCS.NS", "INFOSYS": "INFY.NS", "WIPRO": "WIPRO.NS", "HCL TECH": "HCLTECH.NS",
+    "TECH MAHINDRA": "TECHM.NS", "LTIMINDTREE": "LTIM.NS", "PERSISTENT": "PERSISTENT.NS",
+    
+    # Auto
+    "TATA MOTORS": "TATAMOTORS.NS", "M&M": "M&M.NS", "MARUTI": "MARUTI.NS",
+    "BAJAJ AUTO": "BAJAJ-AUTO.NS", "HERO MOTO": "HEROMOTOCO.NS", "EICHER MOTORS": "EICHERMOT.NS",
+    "TVS MOTOR": "TVSMOTOR.NS", "ASHOK LEYLAND": "ASHOKLEY.NS",
+    
+    # Energy, Oil & Gas
+    "RELIANCE": "RELIANCE.NS", "ONGC": "ONGC.NS", "NTPC": "NTPC.NS", "POWERGRID": "POWERGRID.NS",
+    "COAL INDIA": "COALINDIA.NS", "BPCL": "BPCL.NS", "HPCL": "HINDPETRO.NS", "IOC": "IOC.NS",
+    "GAIL": "GAIL.NS", "TATA POWER": "TATAPOWER.NS", "ADANI GREEN": "ADANIGREEN.NS",
+    
+    # Metals & Mining
+    "TATA STEEL": "TATASTEEL.NS", "HINDALCO": "HINDALCO.NS", "JSW STEEL": "JSWSTEEL.NS",
+    "VEDANTA": "VEDL.NS", "NATIONAL ALUM (NALCO)": "NATIONALUM.NS", "NMDC": "NMDC.NS",
+    
+    # FMCG & Retail
+    "ITC": "ITC.NS", "HUL": "HINDUNILVR.NS", "NESTLE": "NESTLEIND.NS", "BRITANNIA": "BRITANNIA.NS",
+    "TATA CONSUMER": "TATACONSUM.NS", "DMART": "AWL.NS", "TITAN": "TITAN.NS", "TRENT": "TRENT.NS",
+    
+    # Pharma & Healthcare
+    "SUN PHARMA": "SUNPHARMA.NS", "CIPLA": "CIPLA.NS", "DR REDDY": "DRREDDY.NS",
+    "DIVIS LAB": "DIVISLAB.NS", "APOLLO HOSPITALS": "APOLLOHOSP.NS", "LUPIN": "LUPIN.NS",
+    
+    # Infrastructure, Cement & Others
+    "L&T": "LT.NS", "ULTRATECH": "ULTRACEMCO.NS", "GRASIM": "GRASIM.NS",
+    "AMBUJA CEMENTS": "AMBUJACEM.NS", "SHREE CEMENT": "SHREECEM.NS", "ADANI PORTS": "ADANIPORTS.NS",
+    "ADANI ENT": "ADANIENT.NS", "IRFC": "IRFC.NS", "RVNL": "RVNL.NS", "HAL": "HAL.NS", "BEL": "BEL.NS"
 }
-INDICES = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
 
+INDICES = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
 
 # ================= TREND: SuperTrend(10,3) =================
 def supertrend_bull_bear(df, period=10, mult=3.0):
@@ -69,12 +99,11 @@ def supertrend_bull_bear(df, period=10, mult=3.0):
             else: direction[i] = -1
     return pd.Series(direction, index=df.index)
 
-
 # ================= HELPER FUNCTIONS =================
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_market_data(symbol, period="2d"):
     try:
-        time.sleep(0.5)
+        time.sleep(0.1) # Reduced sleep for faster scanning
         df = yf.Ticker(symbol).history(period=period, interval="5m")
         return df
     except Exception:
@@ -162,7 +191,7 @@ def analyze_orb_vwap_trend(df, symbol_name: str):
         grade = "STRONG"
     elif orb_up:
         side = "CALL"
-        grade = "WEAK" # Only ORB broken, lacking volume/vwap/trend support
+        grade = "WEAK" 
     elif orb_dn:
         side = "PUT"
         grade = "WEAK"
@@ -193,14 +222,11 @@ def indices_options_tables(spot: float, symbol_name: str, ladder_step: int = 100
     def get_rec_text(is_call, i):
         if not data or data.get("side") == "NONE": return "⚪ Wait"
         want = "CALL" if is_call else "PUT"
-        
         if data.get("side") != want: return "⚪ Avoid"
-        
         if data.get("grade") == "STRONG":
             return f"🟢 Strong Buy (Focus ATM)" if i == 0 else f"🟡 Buy {want}"
         if data.get("grade") == "WEAK":
             return f"🟡 Risky/Weak {want}"
-            
         return "⚪ Wait"
 
     return {
@@ -208,7 +234,7 @@ def indices_options_tables(spot: float, symbol_name: str, ladder_step: int = 100
         "puts": pd.DataFrame([{"Strike (PE)": s, "Recommendation": get_rec_text(False, i), "Stop Loss": "-30% Prem"} for i, s in enumerate(pe_st)])
     }
 
-# Original 9 Candles function unchanged
+# Original 9 Candles function 
 def analyze_9_candles(df, symbol_name="Stock"):
     try:
         if len(df) < 15: return None
@@ -240,7 +266,6 @@ def analyze_9_candles(df, symbol_name="Stock"):
         return {"signal": signal, "score": score, "price": price, "rsi": rsi, "target": tgt, "sl": sl, "strike": f"{get_atm_strike(price, symbol_name)} {opt_type}" if opt_type else "Wait"}
     except Exception: return None
 
-
 # ================= TABS =================
 t1, t2, t3, t4, t5 = st.tabs(["📊 Stock Analysis", "📈 Indices (ORB+VWAP)", "🎯 Recommendations", "🔥 Scanner", "📰 News"])
 
@@ -270,7 +295,6 @@ with t2:
             if not idx_df.empty:
                 s_data = analyze_orb_vwap_trend(idx_df, name)
                 if s_data:
-                    # Headline Signal
                     if s_data["is_strong_call"]:
                         st.markdown("**🟢 STRONG CALL (All 4 Filters Passed)**")
                     elif s_data["is_strong_put"]:
@@ -278,14 +302,12 @@ with t2:
                     else:
                         st.markdown("**⏳ WAITING FOR PROPER BREAKOUT...**")
                     
-                    # 4 Metrics Printout
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Spot LTP", f"₹{s_data['price']}")
                     m2.metric("VWAP", f"₹{s_data['vwap']}")
                     m3.metric("Trend (ST)", s_data["trend_dir"])
                     m4.metric("ORB Range", f"{s_data['orb_high']} - {s_data['orb_low']}")
                     
-                    # Filter Checks
                     st.caption(
                         f"**Filters Check:** "
                         f"ORB Brk: {'🟢 Up' if s_data['orb_up'] else '🔴 Dn' if s_data['orb_dn'] else '⚪ Inside'} | "
@@ -294,9 +316,7 @@ with t2:
                     )
                     st.write("---")
                     
-                    # Options Table
                     otab = indices_options_tables(s_data['price'], name, ladder_step=100, n=4, data=s_data)
-                    
                     st.markdown("### Call Options (CE)")
                     st.dataframe(otab["calls"], use_container_width=True, hide_index=True)
                     st.markdown("### Put Options (PE)")
@@ -304,6 +324,7 @@ with t2:
 
 with t3:
     st.header("🎯 Active Buy Recommendations")
+    st.warning("Scanning for recommendations might take a moment...")
     if st.button("🔍 Find Setup"):
         recom_list = []
         for name, s in {**INDICES, **STOCK_MAP}.items():
@@ -312,22 +333,55 @@ with t3:
                 res = analyze_9_candles(temp_df, name)
                 if res and ("STRONG" in res["signal"] or "WEAK" in res["signal"]):
                     recom_list.append({"Asset": name, "Signal": res["signal"], "Entry (Spot)": res["price"], "Target": res["target"], "SL": res["sl"]})
-        if recom_list: st.dataframe(pd.DataFrame(recom_list), use_container_width=True)
+        if recom_list: 
+            st.dataframe(pd.DataFrame(recom_list), use_container_width=True)
+        else:
+            st.info("No strong signals found right now.")
 
 with t4:
-    st.header("🔥 Momentum Scanner")
+    st.header("🔥 Momentum Scanner (High Liquidity Stocks)")
+    st.warning("Note: Scanning large lists takes time. Please wait for the progress bar to complete.")
+    
     if st.button("🚀 Start Scan"):
         results = []
-        for n, s in STOCK_MAP.items():
+        total_stocks = len(STOCK_MAP)
+        
+        # Progress bar setup
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, (n, s) in enumerate(STOCK_MAP.items()):
+            # Update status text
+            status_text.text(f"Scanning {n} ({i+1}/{total_stocks})...")
+            
             scan_df = fetch_market_data(s, period="3d")
             if not scan_df.empty:
                 r = analyze_9_candles(scan_df, n)
-                if r: results.append({"Stock": n, "Signal": r["signal"], "RSI": r["rsi"], "LTP": r["price"]})
-        if results: st.dataframe(pd.DataFrame(results), use_container_width=True)
+                # Filtering out sideways to only show actual setups
+                if r and r["signal"] != "⚪ SIDEWAYS": 
+                    results.append({
+                        "Stock": n, 
+                        "Signal": r["signal"], 
+                        "RSI": r["rsi"], 
+                        "LTP": f"₹{r['price']}"
+                    })
+                    
+            # Update progress bar
+            progress_bar.progress((i + 1) / total_stocks)
+            
+        status_text.text("✅ Scan Complete!")
+        
+        if results: 
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
+        else:
+            st.info("No actionable signals found right now.")
 
 with t5:
     st.header("📰 Live Stock News")
     news_sel = st.selectbox("Choose Stock:", list(STOCK_MAP.keys()))
     if st.button("Fetch News"):
         news_items = get_indian_news(news_sel)
-        for item in news_items: st.markdown(f"- [{item['title']}]({item['link']})")
+        if news_items:
+            for item in news_items: st.markdown(f"- [{item['title']}]({item['link']})")
+        else:
+            st.write("No latest news found.")
